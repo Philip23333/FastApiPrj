@@ -1,0 +1,70 @@
+# FastAPI Application
+import os
+from typing import Any
+
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from routers import favorite, news, users, history, upload
+from config.db_config import async_engine
+from utils.response import ApiResponse, ErrorResponse, ValidationErrorItem, success_response, error_response
+from config.cache_config import redis_client
+
+app = FastAPI()
+
+# --- 确保 static/uploads 目录存在 ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+os.makedirs(os.path.join(STATIC_DIR, "uploads"), exist_ok=True)
+
+# 挂载静态文件目录，使得可以通过 /static 访问图片等静态资源
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# --- 添加这段配置，允许前端跨域请求 ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 允许所有人（开发时可以用 *，生产环境建议填前端具体的域名）
+    allow_credentials=True,
+    allow_methods=["*"],  # 允许所有方法（GET, POST, PUT, DELETE等）
+    allow_headers=["*"],
+)
+
+@app.get("/", response_model=ApiResponse[None])
+async def root():
+    return success_response(message="Hello World")
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_: Request, exc: HTTPException):
+    message = exc.detail if isinstance(exc.detail, str) else "HTTP error"
+    data = None if isinstance(exc.detail, str) else exc.detail
+    payload: ErrorResponse[Any] = error_response(exc.status_code, message, data)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=payload.dict(),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(_: Request, exc: RequestValidationError):
+    errors = [ValidationErrorItem(**item) for item in exc.errors()]
+    payload: ErrorResponse[list[ValidationErrorItem]] = error_response(422, "Validation Error", errors)
+    return JSONResponse(
+        status_code=422,
+        content=payload.dict(),
+    )
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await redis_client.close()
+    await async_engine.dispose()
+
+
+app.include_router(news.router)
+app.include_router(users.router)
+app.include_router(favorite.router)
+app.include_router(history.router)
+app.include_router(upload.router)

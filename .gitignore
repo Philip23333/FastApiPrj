@@ -1,0 +1,31 @@
+# --- 数据库文件 (绝对不要上传) ---
+mysql_data/
+*.sql
+*.db
+*.sqlite3
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.env
+.pytest_cache/
+
+# --- 前端 Node ---
+node_modules/
+dist/
+*.log
+
+# --- 编辑器 ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- 系统文件 ---
+.DS_Store
+Thumbs.db
