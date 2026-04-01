@@ -1,13 +1,15 @@
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import axios from 'axios'
+import DOMPurify from 'dompurify'
 import AuthModal from '../components/AuthModal.vue'
 import TopNavBar from '../components/TopNavBar.vue'
 import { useTopNavAuth } from '../composables/useTopNavAuth'
 
 const router = useRouter()
 const route = useRoute()
+const API_BASE = 'http://127.0.0.1:8080'
 const {
   currentUser,
   restoreCurrentUser,
@@ -28,6 +30,36 @@ const isFavorited = ref(false)
 
 // 相关推荐数据
 const relatedNews = ref([])
+
+const toAbsoluteUrl = (url) => {
+  if (!url) return ''
+  if (url.startsWith('http://') || url.startsWith('https://')) return url
+  if (url.startsWith('/')) return `${API_BASE}${url}`
+  return url
+}
+
+const renderedContentHtml = computed(() => {
+  const raw = newsItem.value?.content || ''
+  if (!raw) return ''
+
+  const container = document.createElement('div')
+  container.innerHTML = raw
+
+  container.querySelectorAll('img').forEach((img) => {
+    const src = img.getAttribute('src') || ''
+    if (src) {
+      img.setAttribute('src', toAbsoluteUrl(src))
+    }
+    img.setAttribute('loading', 'lazy')
+  })
+
+  container.querySelectorAll('a').forEach((a) => {
+    a.setAttribute('target', '_blank')
+    a.setAttribute('rel', 'noopener noreferrer nofollow')
+  })
+
+  return DOMPurify.sanitize(container.innerHTML)
+})
 
 const fetchRelatedNews = async (categoryId, currentNewsId) => {
   try {
@@ -209,10 +241,8 @@ const handleAuthSuccessFromModal = async (payload) => {
 
           <!-- 新闻正文渲染 -->
           <div class="article-content">
-             <img v-if="newsItem.image" :src="newsItem.image" class="article-cover" alt="封面配图"/>
-             <div class="text-content" style="white-space: pre-wrap;">
-                {{ newsItem.content }}
-             </div>
+             <img v-if="newsItem.image" :src="toAbsoluteUrl(newsItem.image)" class="article-cover" alt="封面配图"/>
+             <div class="rich-content" v-html="renderedContentHtml"></div>
           </div>
           
           <!-- 相关推荐区域 -->
@@ -233,7 +263,7 @@ const handleAuthSuccessFromModal = async (payload) => {
                   </div>
                 </div>
                 
-                <img v-if="news.image" :src="news.image" alt="news cover" class="news-img" />
+                <img v-if="news.image" :src="toAbsoluteUrl(news.image)" alt="news cover" class="news-img" />
               </div>
             </div>
           </div>
@@ -323,6 +353,7 @@ const handleAuthSuccessFromModal = async (payload) => {
 /* 2. 文章主体 */
 .article-container {
   flex-grow: 1;
+  min-width: 0;
   max-width: 660px;
   padding: 0 10px;
 }
@@ -332,6 +363,9 @@ const handleAuthSuccessFromModal = async (payload) => {
   line-height: 1.4;
   color: #222;
   margin: 20px 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .article-meta {
   display: flex;
@@ -356,6 +390,62 @@ const handleAuthSuccessFromModal = async (payload) => {
   line-height: 1.8;
   padding-bottom: 100px;
   text-align: left;
+}
+
+.rich-content {
+  font-size: 18px;
+  line-height: 1.9;
+  color: #2b2b2b;
+  word-break: break-word;
+}
+
+.rich-content :deep(p) {
+  margin: 0 0 1em;
+}
+
+.rich-content :deep(h1),
+.rich-content :deep(h2),
+.rich-content :deep(h3) {
+  margin: 1.2em 0 0.6em;
+  line-height: 1.4;
+  color: #1f1f1f;
+}
+
+.rich-content :deep(blockquote) {
+  margin: 1em 0;
+  padding: 10px 14px;
+  border-left: 4px solid #f04142;
+  background: #fff4f4;
+  color: #444;
+}
+
+.rich-content :deep(ul),
+.rich-content :deep(ol) {
+  padding-left: 1.4em;
+  margin: 0.8em 0;
+}
+
+.rich-content :deep(pre) {
+  overflow-x: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f6f8fa;
+}
+
+.rich-content :deep(code) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.rich-content :deep(img) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 14px 0;
+}
+
+.rich-content :deep(a) {
+  color: #1559d6;
+  text-decoration: underline;
 }
 .article-cover {
   width: 100%;
@@ -401,6 +491,7 @@ const handleAuthSuccessFromModal = async (payload) => {
 }
 .news-content {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -412,6 +503,12 @@ const handleAuthSuccessFromModal = async (payload) => {
   line-height: 1.5;
   margin: 0 0 8px 0;
   text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 .news-desc {
   font-size: 14px;

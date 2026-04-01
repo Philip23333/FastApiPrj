@@ -8,7 +8,7 @@ from config.db_config import get_db
 from crud import news as news_crud
 from dependencies.auth import get_current_user
 from models.user import User
-from schemas.news import CategoryOut, HotNewsItemOut, NewsDetailOut, NewsListItemOut, SearchNewsItemOut, SearchSuggestionOut
+from schemas.news import CategoryOut, HotNewsItemOut, NewsCreate, NewsDetailOut, NewsListItemOut, SearchNewsItemOut, SearchSuggestionOut
 from utils.response import ApiResponse, PaginatedData, paginated_response, success_response
 from config.cache_config import redis_client
 
@@ -127,6 +127,163 @@ async def search_news(q: str, page: int = 1, size: int = 10, db: AsyncSession = 
     ]
 
     return paginated_response(items, total=total, page=safe_page, size=safe_size, message="search results")
+
+
+@router.post("/", response_model=ApiResponse[NewsDetailOut])
+async def create_news(
+    news_in: NewsCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user:
+        raise HTTPException(status_code=401, detail="用户未登录")
+
+    category = await news_crud.get_category_by_id(db, news_in.category_id)
+    if not category:
+        raise HTTPException(status_code=404, detail=f"分类ID {news_in.category_id} 不存在")
+
+    input_category_name = (news_in.category_name or "").strip()
+    if category.name != input_category_name:
+        raise HTTPException(status_code=400, detail="分类ID与分类名称不匹配")
+
+    if not news_in.author:
+        news_in.author = current_user.username
+
+    try:
+        created = await news_crud.create_news(db, news_in, category_id=news_in.category_id)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+
+    # 发布后失效受影响缓存，保证列表和分类页可见新数据
+    try:
+        list_keys = await redis_client.keys(f"{NEWS_LIST_CACHE_KEY_PREFIX}:*")
+        if list_keys:
+            await redis_client.delete(*list_keys)
+
+        category_keys = await redis_client.keys(f"{CATEGORY_NEWS_CACHE_KEY_PREFIX}:{created.category_id}:*")
+        if category_keys:
+            await redis_client.delete(*category_keys)
+    except Exception as exc:
+        logger.warning("cache clear failed after create news id=%s, error=%s", created.id, exc)
+
+    payload = NewsDetailOut(
+        id=created.id,
+        title=created.title,
+        description=created.description,
+        content=created.content,
+        category_id=created.category_id,
+        category_name=category.name if category else "未知",
+        author=created.author,
+        views=created.views,
+        publish_time=created.publish_time,
+        image=created.image,
+    )
+    return success_response(payload, message="新闻发布成功")
+
+
+@router.put("/{news_id}", response_model=ApiResponse[NewsDetailOut])
+async def update_news(
+    news_id: int,
+    news_in: NewsCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user:
+        raise HTTPException(status_code=401, detail="用户未登录")
+
+    db_news = await news_crud.get_news_by_id_plain(db, news_id)
+    if not db_news:
+        raise HTTPException(status_code=404, detail="新闻不存在")
+
+    editable_authors = {current_user.username}
+    if current_user.nickname:
+        editable_authors.add(current_user.nickname)
+    if db_news.author not in editable_authors:
+        raise HTTPException(status_code=403, detail="无权限编辑该新闻")
+
+    category = await news_crud.get_category_by_id(db, news_in.category_id)
+    if not category:
+        raise HTTPException(status_code=404, detail=f"分类ID {news_in.category_id} 不存在")
+    if category.name != news_in.category_name.strip():
+        raise HTTPException(status_code=400, detail="分类ID与分类名称不匹配")
+
+    old_category_id = db_news.category_id
+    try:
+        updated = await news_crud.update_news(db, db_news, news_in, category_id=news_in.category_id)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+
+    try:
+        list_keys = await redis_client.keys(f"{NEWS_LIST_CACHE_KEY_PREFIX}:*")
+        if list_keys:
+            await redis_client.delete(*list_keys)
+
+        affected_categories = {old_category_id, updated.category_id}
+        for cat_id in affected_categories:
+            category_keys = await redis_client.keys(f"{CATEGORY_NEWS_CACHE_KEY_PREFIX}:{cat_id}:*")
+            if category_keys:
+                await redis_client.delete(*category_keys)
+    except Exception as exc:
+        logger.warning("cache clear failed after update news id=%s, error=%s", updated.id, exc)
+
+    payload = NewsDetailOut(
+        id=updated.id,
+        title=updated.title,
+        description=updated.description,
+        content=updated.content,
+        category_id=updated.category_id,
+        category_name=category.name,
+        author=updated.author,
+        views=updated.views,
+        publish_time=updated.publish_time,
+        image=updated.image,
+    )
+    return success_response(payload, message="新闻更新成功")
+
+
+@router.delete("/{news_id}", response_model=ApiResponse[None])
+async def delete_news(
+    news_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user:
+        raise HTTPException(status_code=401, detail="用户未登录")
+
+    db_news = await news_crud.get_news_by_id_plain(db, news_id)
+    if not db_news:
+        raise HTTPException(status_code=404, detail="新闻不存在")
+
+    editable_authors = {current_user.username}
+    if current_user.nickname:
+        editable_authors.add(current_user.nickname)
+    if db_news.author not in editable_authors:
+        raise HTTPException(status_code=403, detail="无权限删除该新闻")
+
+    category_id = db_news.category_id
+    try:
+        await news_crud.delete_news(db, db_news)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+
+    try:
+        list_keys = await redis_client.keys(f"{NEWS_LIST_CACHE_KEY_PREFIX}:*")
+        if list_keys:
+            await redis_client.delete(*list_keys)
+
+        category_keys = await redis_client.keys(f"{CATEGORY_NEWS_CACHE_KEY_PREFIX}:{category_id}:*")
+        if category_keys:
+            await redis_client.delete(*category_keys)
+    except Exception as exc:
+        logger.warning("cache clear failed after delete news id=%s, error=%s", news_id, exc)
+
+    return success_response(None, message="新闻删除成功")
 
 # TODO: Implement news-related endpoints here
 # 现在返回值必须指定为 ApiResponse[具体类型]，以便前端能正确解析 data 字段里的内容。
@@ -266,6 +423,7 @@ async def get_news_by_id(
     news_data = NewsDetailOut(
         id=news.id,
         title=news.title,
+        description=news.description,
         content=news.content,
         category_id=news.category_id,
         category_name=news.category.name if news.category else "未知",

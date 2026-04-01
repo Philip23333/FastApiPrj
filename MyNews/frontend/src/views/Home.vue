@@ -6,6 +6,8 @@ import AuthModal from '../components/AuthModal.vue'
 import TopNavBar from '../components/TopNavBar.vue'
 import { useTopNavAuth } from '../composables/useTopNavAuth'
 
+const API_BASE = 'http://127.0.0.1:8080'
+
 const router = useRouter()
 const {
   currentUser,
@@ -180,6 +182,13 @@ const formatTime = (dateStr) => {
   }
 }
 
+const normalizeImageUrl = (url) => {
+  if (!url) return ''
+  if (url.startsWith('http://') || url.startsWith('https://')) return url
+  if (url.startsWith('/')) return `${API_BASE}${url}`
+  return `${API_BASE}/${url}`
+}
+
 const goToDetail = (id) => {
   if (!currentUser.value?.id) {
     window.dispatchEvent(new CustomEvent('auth-required', {
@@ -261,7 +270,7 @@ const handlePublishClickFromNav = () => {
             </div>
             
             <!-- 右侧新闻图片 -->
-            <img v-if="news.image" :src="news.image" alt="news cover" class="news-img" />
+            <img v-if="news.image" :src="normalizeImageUrl(news.image)" alt="news cover" class="news-img" />
           </div>
         </div>
 
@@ -414,6 +423,7 @@ body {
 }
 .news-content {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -424,6 +434,13 @@ body {
   font-weight: 700;
   line-height: 1.5;
   margin: 0 0 8px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  word-break: break-word;
   text-align: left;
 }
 .news-desc {
@@ -445,6 +462,7 @@ body {
   color: #777;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   justify-content: flex-start; /* 元数据向左对齐更符合头条习惯 */
   gap: 8px;
 }
@@ -559,6 +577,7 @@ body {
 .hot-list li {
   display: flex;
   align-items: flex-start;
+  min-width: 0;
   margin-bottom: 16px;
   cursor: pointer;
   text-align: left;
@@ -581,9 +600,13 @@ body {
 .hot-title {
   margin: 0;
   flex: 1;
+  min-width: 0;
   font-size: 15px;
   color: #222;
   line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .hot-title:hover {
   color: #406599;

@@ -1,9 +1,11 @@
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 import TopNavBar from '../components/TopNavBar.vue'
 import { useTopNavAuth } from '../composables/useTopNavAuth'
+
+const API_BASE = 'http://127.0.0.1:8080'
 
 const router = useRouter()
 const {
@@ -35,6 +37,11 @@ const favoriteSelectMode = ref(false)
 const selectedFavoriteNewsIds = ref([])
 const historySelectMode = ref(false)
 const selectedHistoryNewsIds = ref([])
+const openedWorksMenuNewsId = ref(null)
+const deletingNewsId = ref(null)
+const toastMessage = ref('')
+const toastVisible = ref(false)
+let toastTimer = null
 
 const displayName = computed(() => profile.value.nickname || profile.value.username || '头条用户')
 const avatarText = computed(() => (displayName.value || '头').slice(0, 1).toUpperCase())
@@ -93,6 +100,70 @@ const goToNewsDetail = (id) => {
   router.push(`/news/${id}`)
 }
 
+const goToEditNews = (id) => {
+  router.push(`/publish?edit=${id}`)
+}
+
+const showToast = (message) => {
+  toastMessage.value = message
+  toastVisible.value = true
+  if (toastTimer) {
+    clearTimeout(toastTimer)
+  }
+  toastTimer = setTimeout(() => {
+    toastVisible.value = false
+    toastMessage.value = ''
+    toastTimer = null
+  }, 2200)
+}
+
+const isWorksMenuOpen = (newsId) => openedWorksMenuNewsId.value === newsId
+
+const toggleWorksMenu = (newsId) => {
+  openedWorksMenuNewsId.value = isWorksMenuOpen(newsId) ? null : newsId
+}
+
+const closeWorksMenu = () => {
+  openedWorksMenuNewsId.value = null
+}
+
+const editWork = (newsId) => {
+  closeWorksMenu()
+  goToEditNews(newsId)
+}
+
+const deleteWork = async (newsId) => {
+  if (deletingNewsId.value) return
+  if (!window.confirm('确定要删除这篇新闻吗？删除后不可恢复。')) {
+    return
+  }
+
+  try {
+    deletingNewsId.value = newsId
+    const res = await axios.delete(`${API_BASE}/news/${newsId}`)
+    if (res.data?.code === 200) {
+      works.value = works.value.filter((item) => item.id !== newsId)
+      closeWorksMenu()
+      showToast('删除成功')
+      return
+    }
+    alert(res.data?.message || '删除失败，请稍后重试。')
+  } catch (error) {
+    console.error(error)
+    alert(error?.response?.data?.message || error?.response?.data?.detail || '删除失败，请稍后重试。')
+  } finally {
+    deletingNewsId.value = null
+  }
+}
+
+const handleGlobalClick = (event) => {
+  const target = event.target
+  if (!(target instanceof HTMLElement)) return
+  if (!target.closest('.works-menu-wrapper')) {
+    closeWorksMenu()
+  }
+}
+
 const formatViewTime = (value) => {
   if (!value) return ''
   const date = typeof value === 'number'
@@ -100,6 +171,13 @@ const formatViewTime = (value) => {
     : new Date(value)
   if (Number.isNaN(date.getTime())) return ''
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+const normalizeImageUrl = (url) => {
+  if (!url) return ''
+  if (url.startsWith('http://') || url.startsWith('https://')) return url
+  if (url.startsWith('/')) return `${API_BASE}${url}`
+  return `${API_BASE}/${url}`
 }
 
 const fetchProfile = async () => {
@@ -375,6 +453,7 @@ const batchRemoveFavorites = async () => {
 }
 
 onMounted(async () => {
+  window.addEventListener('click', handleGlobalClick)
   restoreCurrentUser()
   if (!ensureAuthenticated('')) {
     return
@@ -384,6 +463,14 @@ onMounted(async () => {
   await fetchWorks()
   await fetchFavorites()
   await fetchHistories()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('click', handleGlobalClick)
+  if (toastTimer) {
+    clearTimeout(toastTimer)
+    toastTimer = null
+  }
 })
 </script>
 
@@ -541,7 +628,16 @@ onMounted(async () => {
                   <span>{{ item.views }} 阅读</span>
                 </div>
               </div>
-              <img v-if="item.image" :src="item.image" alt="cover" class="cover" />
+              <img v-if="item.image" :src="normalizeImageUrl(item.image)" alt="cover" class="cover" />
+              <div class="works-menu-wrapper" @click.stop>
+                <button class="works-menu-trigger" @click="toggleWorksMenu(item.id)">...</button>
+                <div v-if="isWorksMenuOpen(item.id)" class="works-menu-dropdown">
+                  <button class="works-menu-item" @click="editWork(item.id)">编辑</button>
+                  <button class="works-menu-item danger" :disabled="deletingNewsId === item.id" @click="deleteWork(item.id)">
+                    {{ deletingNewsId === item.id ? '删除中...' : '删除' }}
+                  </button>
+                </div>
+              </div>
             </article>
           </div>
         </div>
@@ -577,7 +673,7 @@ onMounted(async () => {
                   <span v-if="item.favorite_time">收藏于 {{ formatViewTime(item.favorite_time) }}</span>
                 </div>
               </div>
-              <img v-if="item.image" :src="item.image" alt="cover" class="cover" />
+              <img v-if="item.image" :src="normalizeImageUrl(item.image)" alt="cover" class="cover" />
             </article>
           </div>
         </div>
@@ -612,7 +708,7 @@ onMounted(async () => {
                   <span v-if="item.view_time">浏览于 {{ formatViewTime(item.view_time) }}</span>
                 </div>
               </div>
-              <img v-if="item.image" :src="item.image" alt="cover" class="cover" />
+              <img v-if="item.image" :src="normalizeImageUrl(item.image)" alt="cover" class="cover" />
             </article>
           </div>
         </div>
@@ -649,6 +745,10 @@ onMounted(async () => {
         </div>
       </div>
     </div>
+
+    <transition name="toast-fade">
+      <div v-if="toastVisible" class="toast toast-success">{{ toastMessage }}</div>
+    </transition>
   </div>
 </template>
 
@@ -840,6 +940,7 @@ onMounted(async () => {
 
 .news-item {
   display: flex;
+  align-items: center;
   gap: 14px;
   padding: 16px 4px;
   border-bottom: 1px solid #eef0f3;
@@ -858,6 +959,7 @@ onMounted(async () => {
 
 .news-main {
   flex: 1;
+  min-width: 0;
   text-align: left;
 }
 
@@ -867,12 +969,24 @@ onMounted(async () => {
   font-size: 20px;
   line-height: 1.4;
   transition: color 0.2s;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .desc {
   margin: 8px 0 10px;
   color: #666;
   line-height: 1.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .meta {
@@ -888,6 +1002,98 @@ onMounted(async () => {
   border-radius: 6px;
   object-fit: cover;
   flex-shrink: 0;
+}
+
+.works-menu-wrapper {
+  position: relative;
+  width: 2.6em;
+  min-width: 2.6em;
+  flex: 0 0 2.6em;
+  display: flex;
+  justify-content: flex-end;
+  z-index: 5;
+}
+
+.works-menu-trigger {
+  width: 2.6em;
+  min-width: 2.6em;
+  height: 28px;
+  border: 1px solid #d9dde3;
+  border-radius: 8px;
+  background: #fff;
+  color: #6b7280;
+  cursor: pointer;
+  line-height: 1;
+  font-size: 16px;
+}
+
+.works-menu-dropdown {
+  position: absolute;
+  right: 0;
+  top: 34px;
+  min-width: 92px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.1);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.works-menu-item {
+  border: none;
+  background: #f8fafc;
+  border-radius: 6px;
+  color: #374151;
+  font-size: 13px;
+  height: 30px;
+  cursor: pointer;
+}
+
+.works-menu-item:hover:not(:disabled) {
+  background: #eef2ff;
+}
+
+.works-menu-item.danger {
+  color: #b91c1c;
+  background: #fff1f2;
+}
+
+.works-menu-item:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 72px;
+  transform: translateX(-50%);
+  z-index: 1000;
+  min-width: 140px;
+  max-width: 60vw;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+}
+
+.toast-success {
+  background: #1f9d63;
+  color: #fff;
+}
+
+.toast-fade-enter-active,
+.toast-fade-leave-active {
+  transition: opacity 0.28s ease, transform 0.28s ease;
+}
+
+.toast-fade-enter-from,
+.toast-fade-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(8px);
 }
 
 .favorite-check {

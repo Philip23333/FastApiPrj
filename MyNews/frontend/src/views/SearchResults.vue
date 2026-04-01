@@ -6,6 +6,8 @@ import TopNavBar from '../components/TopNavBar.vue'
 import AuthModal from '../components/AuthModal.vue'
 import { useTopNavAuth } from '../composables/useTopNavAuth'
 
+const API_BASE = 'http://127.0.0.1:8080'
+
 const route = useRoute()
 const router = useRouter()
 
@@ -72,6 +74,13 @@ const formatTime = (dateStr) => {
   if (!dateStr) return ''
   const date = new Date(dateStr)
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+const normalizeImageUrl = (url) => {
+  if (!url) return ''
+  if (url.startsWith('http://') || url.startsWith('https://')) return url
+  if (url.startsWith('/')) return `${API_BASE}${url}`
+  return `${API_BASE}/${url}`
 }
 
 const fetchSearchResults = async () => {
@@ -185,7 +194,7 @@ onMounted(() => {
                 <span>{{ formatTime(item.publish_time) }}</span>
               </div>
             </div>
-            <img v-if="item.image" :src="item.image" alt="cover" class="cover" />
+            <img v-if="item.image" :src="normalizeImageUrl(item.image)" alt="cover" class="cover" />
           </article>
 
           <div class="pager">
@@ -268,6 +277,7 @@ onMounted(() => {
 
 .content {
   flex: 1;
+  min-width: 0;
   text-align: left;
 }
 
@@ -276,11 +286,25 @@ onMounted(() => {
   color: #222;
   font-size: 20px;
   line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  word-break: break-word;
 }
 
 .desc {
   margin: 8px 0 10px;
   color: #5d6672;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  word-break: break-word;
 }
 
 .highlight-keyword {

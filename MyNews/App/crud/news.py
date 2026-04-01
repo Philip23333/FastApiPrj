@@ -17,6 +17,12 @@ async def get_news_by_id(db: AsyncSession, news_id: int):
         
     return news
 
+
+async def get_news_by_id_plain(db: AsyncSession, news_id: int):
+    stmt = select(News).options(joinedload(News.category)).where(News.id == news_id)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
 # 获取新闻分类列表
 async def get_categories(db: AsyncSession, skip: int = 0, limit: int = 100):
     stmt = select(Category).offset(skip).limit(limit)
@@ -136,16 +142,38 @@ async def search_news_suggestions(db: AsyncSession, keyword: str, limit: int = 5
     return result.all()
 
 
-async def create_news(db: AsyncSession, news_in):
+async def create_news(db: AsyncSession, news_in, category_id: int):
     new_news = News(
         title=news_in.title,
         description=news_in.description,
         content=news_in.content,
         image=news_in.image,
         author=news_in.author,
-        category_id=news_in.category_id,
+        category_id=category_id,
     )
     db.add(new_news)
     await db.flush()
     await db.refresh(new_news)
     return new_news
+
+
+async def update_news(db: AsyncSession, db_news: News, news_in, category_id: int):
+    db_news.title = news_in.title
+    db_news.description = news_in.description
+    db_news.content = news_in.content
+    db_news.image = news_in.image
+    db_news.category_id = category_id
+    await db.flush()
+    await db.refresh(db_news)
+    return db_news
+
+
+async def delete_news(db: AsyncSession, db_news: News):
+    await db.delete(db_news)
+    await db.flush()
+
+
+async def get_category_by_id(db: AsyncSession, category_id: int):
+    stmt = select(Category).where(Category.id == category_id)
+    result = await db.execute(stmt)
+    return result.scalars().first()

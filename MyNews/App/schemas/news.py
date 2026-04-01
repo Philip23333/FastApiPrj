@@ -41,6 +41,7 @@ class SearchNewsItemOut(BaseModel):
 class NewsDetailOut(BaseModel):
     id: int
     title: str
+    description: Optional[str] = None
     content: str
     category_id: int
     category_name: str
@@ -65,6 +66,7 @@ class NewsCreate(BaseModel):
     title: str
     content: str
     category_id: int
+    category_name: str
     author: Optional[str] = None
     image: Optional[str] = None
     description: Optional[str] = None
