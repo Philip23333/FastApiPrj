@@ -7,9 +7,7 @@ from crud import user as user_crud
 from models.user import User
 from utils.jwt_auth import decode_access_token
 
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/users/login")
-
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/users/token")
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
@@ -47,4 +45,30 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # 关键校验：禁用账号不允许访问受保护接口。
+    if db_user.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="账号已被禁用",
+        )
+
     return db_user
+
+async def get_current_admin_user(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    # 关键校验：仅激活状态账号允许进入后台管理接口。
+    if current_user.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="账号已被禁用",
+        )
+
+    # 关键校验：用户管理接口只允许 admin 角色访问。
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="仅管理员可执行该操作",
+        )
+
+    return current_user

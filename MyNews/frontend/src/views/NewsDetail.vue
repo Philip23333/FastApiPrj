@@ -6,10 +6,11 @@ import DOMPurify from 'dompurify'
 import AuthModal from '../components/AuthModal.vue'
 import TopNavBar from '../components/TopNavBar.vue'
 import { useTopNavAuth } from '../composables/useTopNavAuth'
+import { API_BASE_URL, withApiBase } from '../config/api'
 
 const router = useRouter()
 const route = useRoute()
-const API_BASE = 'http://127.0.0.1:8080'
+const API_BASE = API_BASE_URL
 const {
   currentUser,
   restoreCurrentUser,
@@ -63,7 +64,7 @@ const renderedContentHtml = computed(() => {
 
 const fetchRelatedNews = async (categoryId, currentNewsId) => {
   try {
-    const response = await axios.get(`http://127.0.0.1:8080/news/categories/${categoryId}/news?page=1&size=20`)
+    const response = await axios.get(withApiBase(`/news/categories/${categoryId}/news?page=1&size=20`))
     if (response.data && response.data.code === 200) {
       let items = response.data.data.items || []
       // 过滤当前展示的新闻
@@ -82,7 +83,7 @@ const fetchNewsDetail = async () => {
   errorMsg.value = ''
   window.scrollTo(0, 0)
   try {
-    const response = await axios.get(`http://127.0.0.1:8080/news/detail/${newsId.value}`)
+    const response = await axios.get(withApiBase(`/news/detail/${newsId.value}`))
     if (response.data && response.data.code === 200) {
       newsItem.value = response.data.data
       
@@ -104,7 +105,7 @@ const fetchNewsDetail = async () => {
 const reportViewHistory = async () => {
   if (!currentUser.value?.id || !newsId.value) return
   try {
-    await axios.post(`http://127.0.0.1:8080/history/${newsId.value}`)
+    await axios.post(withApiBase(`/history/${newsId.value}`))
   } catch (err) {
     console.error('上报浏览记录失败', err)
   }
@@ -117,7 +118,7 @@ const fetchFavoriteStatus = async () => {
   }
 
   try {
-    const response = await axios.get(`http://127.0.0.1:8080/favorites/check/${newsId.value}`)
+    const response = await axios.get(withApiBase(`/favorites/check/${newsId.value}`))
     if (response.data?.code === 200) {
       isFavorited.value = !!response.data.data
     }
@@ -138,14 +139,14 @@ const toggleFavorite = async () => {
   try {
     favoriteLoading.value = true
     if (isFavorited.value) {
-      const res = await axios.delete(`http://127.0.0.1:8080/favorites/${newsId.value}`)
+      const res = await axios.delete(withApiBase(`/favorites/${newsId.value}`))
       if (res.data?.code === 200) {
         isFavorited.value = false
       }
       return
     }
 
-    const res = await axios.post(`http://127.0.0.1:8080/favorites/${newsId.value}`)
+    const res = await axios.post(withApiBase(`/favorites/${newsId.value}`))
     if (res.data?.code === 200) {
       isFavorited.value = true
     }
@@ -363,6 +364,7 @@ const handleAuthSuccessFromModal = async (payload) => {
   line-height: 1.4;
   color: #222;
   margin: 20px 0;
+  text-align: left;
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;

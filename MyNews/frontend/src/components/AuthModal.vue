@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch } from 'vue'
 import axios from 'axios'
+import { withApiBase } from '../config/api'
 
 const props = defineProps({
   visible: {
@@ -44,8 +45,8 @@ const submitAuth = async () => {
   }
 
   const url = isLoginMode.value
-    ? 'http://127.0.0.1:8080/users/login'
-    : 'http://127.0.0.1:8080/users/register'
+    ? withApiBase('/users/login')
+    : withApiBase('/users/register')
 
   try {
     const res = await axios.post(url, authForm.value)

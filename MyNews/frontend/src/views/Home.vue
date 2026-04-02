@@ -5,8 +5,9 @@ import axios from 'axios'
 import AuthModal from '../components/AuthModal.vue'
 import TopNavBar from '../components/TopNavBar.vue'
 import { useTopNavAuth } from '../composables/useTopNavAuth'
+import { API_BASE_URL, withApiBase } from '../config/api'
 
-const API_BASE = 'http://127.0.0.1:8080'
+const API_BASE = API_BASE_URL
 
 const router = useRouter()
 const {
@@ -44,7 +45,7 @@ const hotRefreshMinSpinMs = 500
 // 获取分类标签
 const fetchCategories = async () => {
   try {
-    const response = await axios.get('http://127.0.0.1:8080/news/categories')
+    const response = await axios.get(withApiBase('/news/categories'))
     if (response.data && response.data.code === 200) {
       categories.value = response.data.data
     }
@@ -61,9 +62,9 @@ const fetchNews = async (page = 1, append = false) => {
   errorMsg.value = ''
   
   try {
-    let url = `http://127.0.0.1:8080/news/?page=${page}&size=10`
+    let url = withApiBase(`/news/?page=${page}&size=10`)
     if (activeCategoryId.value !== 0) {
-      url = `http://127.0.0.1:8080/news/categories/${activeCategoryId.value}/news?page=${page}&size=10`
+      url = withApiBase(`/news/categories/${activeCategoryId.value}/news?page=${page}&size=10`)
     }
     const response = await axios.get(url)
     if (response.data && response.data.code === 200) {
@@ -110,7 +111,7 @@ const fetchHotList = async (page = 1) => {
   hotErrorMsg.value = ''
 
   try {
-    const response = await axios.get('http://127.0.0.1:8080/news/hot', {
+    const response = await axios.get(withApiBase('/news/hot'), {
       params: {
         min_views: HOT_MIN_VIEWS_THRESHOLD,
         page,

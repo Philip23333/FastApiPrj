@@ -177,3 +177,60 @@ async def get_category_by_id(db: AsyncSession, category_id: int):
     stmt = select(Category).where(Category.id == category_id)
     result = await db.execute(stmt)
     return result.scalars().first()
+
+
+async def get_news_count_for_admin(
+    db: AsyncSession,
+    audit_status: str | None = None,
+):
+    stmt = select(func.count(News.id)).where(News.is_deleted.is_(False))
+    if audit_status:
+        stmt = stmt.where(News.audit_status == audit_status)
+    result = await db.execute(stmt)
+    return result.scalar()
+
+
+async def get_news_for_admin(
+    db: AsyncSession,
+    skip: int = 0,
+    limit: int = 20,
+    audit_status: str | None = None,
+):
+    stmt = (
+        select(News)
+        .options(joinedload(News.category))
+        .where(News.is_deleted.is_(False))
+        .order_by(desc(News.publish_time))
+        .offset(skip)
+        .limit(limit)
+    )
+    if audit_status:
+        stmt = stmt.where(News.audit_status == audit_status)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+async def admin_moderate_news(
+    db: AsyncSession,
+    db_news: News,
+    *,
+    category_id: int | None = None,
+    audit_status: str | None = None,
+    audit_remark: str | None = None,
+    audited_by_user_id: int | None = None,
+    audited_at = None,
+):
+    if category_id is not None:
+        db_news.category_id = category_id
+
+    if audit_status is not None:
+        db_news.audit_status = audit_status
+        db_news.audit_remark = audit_remark
+        db_news.audited_by_user_id = audited_by_user_id
+        db_news.audited_at = audited_at
+    elif audit_remark is not None:
+        db_news.audit_remark = audit_remark
+
+    await db.flush()
+    await db.refresh(db_news)
+    return db_news

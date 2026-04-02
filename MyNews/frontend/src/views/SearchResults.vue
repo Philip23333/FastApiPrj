@@ -5,8 +5,9 @@ import axios from 'axios'
 import TopNavBar from '../components/TopNavBar.vue'
 import AuthModal from '../components/AuthModal.vue'
 import { useTopNavAuth } from '../composables/useTopNavAuth'
+import { API_BASE_URL, withApiBase } from '../config/api'
 
-const API_BASE = 'http://127.0.0.1:8080'
+const API_BASE = API_BASE_URL
 
 const route = useRoute()
 const router = useRouter()
@@ -93,7 +94,7 @@ const fetchSearchResults = async () => {
   loading.value = true
   errorMsg.value = ''
   try {
-    const res = await axios.get('http://127.0.0.1:8080/news/search', {
+    const res = await axios.get(withApiBase('/news/search'), {
       params: {
         q: keyword.value,
         page: page.value,

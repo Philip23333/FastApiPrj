@@ -19,9 +19,10 @@ const routes = [
     props: true
   },
   {
-    path: '/users',
-    name: 'UserManage',
-    component: UserManage
+    path: '/admin/users',
+    name: 'AdminUserManage',
+    component: UserManage,
+    meta: { requiresAdmin: true }
   },
   {
     path: '/profile',
@@ -43,6 +44,31 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+router.beforeEach((to, _, next) => {
+  if (!to.meta?.requiresAdmin) {
+    next()
+    return
+  }
+
+  const raw = localStorage.getItem('currentUser')
+  if (!raw) {
+    next('/profile')
+    return
+  }
+
+  try {
+    const currentUser = JSON.parse(raw)
+    if (currentUser?.role === 'admin') {
+      next()
+      return
+    }
+  } catch (e) {
+    // ignore parse error and continue to fallback redirect
+  }
+
+  next('/profile')
 })
 
 export default router

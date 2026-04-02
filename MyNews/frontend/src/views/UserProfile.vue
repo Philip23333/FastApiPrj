@@ -4,8 +4,9 @@ import { useRouter } from 'vue-router'
 import axios from 'axios'
 import TopNavBar from '../components/TopNavBar.vue'
 import { useTopNavAuth } from '../composables/useTopNavAuth'
+import { API_BASE_URL, withApiBase } from '../config/api'
 
-const API_BASE = 'http://127.0.0.1:8080'
+const API_BASE = API_BASE_URL
 
 const router = useRouter()
 const {
@@ -46,6 +47,12 @@ let toastTimer = null
 const displayName = computed(() => profile.value.nickname || profile.value.username || '头条用户')
 const avatarText = computed(() => (displayName.value || '头').slice(0, 1).toUpperCase())
 const profileBio = computed(() => profile.value.bio || '这个人很低调，还没有写简介。')
+const isAdminUser = computed(() => currentUser.value?.role === 'admin')
+
+const goToAdminUserManage = () => {
+  if (!isAdminUser.value) return
+  router.push('/admin/users')
+}
 
 // 弹窗与编辑状态
 const showEditModal = ref(false)
@@ -75,7 +82,7 @@ const saveProfile = async () => {
       delete payload.password
     }
 
-    const res = await axios.put(`http://127.0.0.1:8080/users/${currentUser.value.id}`, payload)
+    const res = await axios.put(withApiBase(`/users/${currentUser.value.id}`), payload)
     if (res.data?.code === 200) {
       profile.value = { ...profile.value, ...res.data.data }
       currentUser.value = { ...currentUser.value, ...res.data.data }
@@ -186,7 +193,7 @@ const fetchProfile = async () => {
   try {
     loadingProfile.value = true
     message.value = ''
-    const res = await axios.get(`http://127.0.0.1:8080/users/${currentUser.value.id}`)
+    const res = await axios.get(withApiBase(`/users/${currentUser.value.id}`))
     if (res.data?.code === 200) {
       profile.value = res.data.data
       currentUser.value = res.data.data
@@ -203,7 +210,7 @@ const fetchProfile = async () => {
 const fetchWorks = async () => {
   try {
     loadingWorks.value = true
-    const res = await axios.get('http://127.0.0.1:8080/news/?page=1&size=100')
+    const res = await axios.get(withApiBase('/news/?page=1&size=100'))
     if (res.data?.code === 200) {
       const allNews = res.data?.data?.items || []
       const keywordA = profile.value.nickname || ''
@@ -227,7 +234,7 @@ const fetchFavorites = async () => {
 
   loadingFavorites.value = true
   try {
-    const res = await axios.get('http://127.0.0.1:8080/favorites?page=1&size=50')
+    const res = await axios.get(withApiBase('/favorites?page=1&size=50'))
     if (res.data?.code !== 200) {
       favorites.value = []
       return
@@ -241,7 +248,7 @@ const fetchFavorites = async () => {
 
     const detailRequests = items.map((fav) =>
       axios
-        .get(`http://127.0.0.1:8080/news/detail/${fav.news_id}`)
+        .get(withApiBase(`/news/detail/${fav.news_id}`))
         .then((detailRes) => {
           const detail = detailRes.data?.data
           if (!detail) return null
@@ -270,7 +277,7 @@ const fetchHistories = async () => {
 
   loadingHistories.value = true
   try {
-    const res = await axios.get('http://127.0.0.1:8080/history?page=1&size=50')
+    const res = await axios.get(withApiBase('/history?page=1&size=50'))
     if (res.data?.code !== 200) {
       histories.value = []
       return
@@ -284,7 +291,7 @@ const fetchHistories = async () => {
 
     const detailRequests = items.map((h) =>
       axios
-        .get(`http://127.0.0.1:8080/news/detail/${h.news_id}`)
+        .get(withApiBase(`/news/detail/${h.news_id}`))
         .then((detailRes) => {
           const detail = detailRes.data?.data
           if (!detail) return null
@@ -397,7 +404,7 @@ const batchRemoveHistories = async () => {
 
   try {
     const targets = [...selectedHistoryNewsIds.value]
-    const tasks = targets.map((newsId) => axios.delete(`http://127.0.0.1:8080/history/${newsId}`))
+    const tasks = targets.map((newsId) => axios.delete(withApiBase(`/history/${newsId}`)))
     const results = await Promise.allSettled(tasks)
 
     const successIds = results
@@ -431,7 +438,7 @@ const batchRemoveFavorites = async () => {
 
   try {
     const targets = [...selectedFavoriteNewsIds.value]
-    const tasks = targets.map((newsId) => axios.delete(`http://127.0.0.1:8080/favorites/${newsId}`))
+    const tasks = targets.map((newsId) => axios.delete(withApiBase(`/favorites/${newsId}`)))
     const results = await Promise.allSettled(tasks)
 
     const successIds = results
@@ -478,7 +485,6 @@ onBeforeUnmount(() => {
   <div class="profile-layout">
     <TopNavBar
       :current-user="currentUser"
-      logo-tag="个人主页"
       @logo-click="goHome"
       @profile-click="goToProfile"
       @logout-click="logout"
@@ -504,6 +510,15 @@ onBeforeUnmount(() => {
             <p class="username">@{{ profile.username || 'anonymous' }}</p>
             <p class="bio">{{ profileBio }}</p>
           </div>
+
+          <button
+            v-if="isAdminUser"
+            class="admin-manage-btn"
+            type="button"
+            @click="goToAdminUserManage"
+          >
+            后台管理
+          </button>
         </div>
       </section>
 
@@ -797,6 +812,25 @@ onBeforeUnmount(() => {
   padding: 0 34px;
 }
 
+.admin-manage-btn {
+  position: absolute;
+  right: 22px;
+  bottom: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: rgba(17, 24, 39, 0.32);
+  color: #fff;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.admin-manage-btn:hover {
+  background: rgba(17, 24, 39, 0.5);
+  transform: translateY(-1px);
+}
+
 .avatar {
   width: 96px;
   height: 96px;
@@ -818,7 +852,13 @@ onBeforeUnmount(() => {
   line-height: 1.2;
   text-align: left;
 }
-
+.user-meta .p {
+  margin: 0;
+  font-size: 34px;
+  color: #fff;
+  line-height: 1.2;
+  text-align: left;
+}
 .username {
   margin: 8px 0 0;
   font-size: 18px;
@@ -831,6 +871,7 @@ onBeforeUnmount(() => {
   color: #fff;
   max-width: 700px;
   line-height: 1.6;
+  text-align: left;
 }
 
 .tab-section {

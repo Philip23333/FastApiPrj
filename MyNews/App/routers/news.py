@@ -1,14 +1,15 @@
 import json
 import logging
 import random
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from config.db_config import get_db
 from crud import news as news_crud
-from dependencies.auth import get_current_user
+from dependencies.auth import get_current_admin_user, get_current_user
 from models.user import User
-from schemas.news import CategoryOut, HotNewsItemOut, NewsCreate, NewsDetailOut, NewsListItemOut, SearchNewsItemOut, SearchSuggestionOut
+from schemas.news import CategoryOut, HotNewsItemOut, NewsAdminItemOut, NewsAdminModerationIn, NewsCreate, NewsDetailOut, NewsListItemOut, SearchNewsItemOut, SearchSuggestionOut
 from utils.response import ApiResponse, PaginatedData, paginated_response, success_response
 from config.cache_config import redis_client
 
@@ -284,6 +285,127 @@ async def delete_news(
         logger.warning("cache clear failed after delete news id=%s, error=%s", news_id, exc)
 
     return success_response(None, message="新闻删除成功")
+
+
+@router.get("/admin/list", response_model=ApiResponse[PaginatedData[NewsAdminItemOut]])
+async def admin_get_news_list(
+    page: int = 1,
+    size: int = 20,
+    audit_status: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_admin_user: User = Depends(get_current_admin_user),
+):
+    _ = current_admin_user
+
+    safe_page = max(1, page)
+    safe_size = max(1, min(size, 100))
+    skip = (safe_page - 1) * safe_size
+
+    allowed_audit_status = {"pending", "approved", "rejected", "draft"}
+    if audit_status and audit_status not in allowed_audit_status:
+        raise HTTPException(status_code=400, detail="audit_status 参数非法")
+
+    total = await news_crud.get_news_count_for_admin(db, audit_status=audit_status)
+    items = await news_crud.get_news_for_admin(db, skip=skip, limit=safe_size, audit_status=audit_status)
+
+    payload = [
+        NewsAdminItemOut(
+            id=n.id,
+            title=n.title,
+            description=n.description,
+            category_id=n.category_id,
+            category_name=n.category.name if n.category else "未知",
+            author=n.author,
+            views=n.views,
+            publish_time=n.publish_time,
+            image=n.image,
+            audit_status=n.audit_status,
+            audit_remark=n.audit_remark,
+            audited_by_user_id=n.audited_by_user_id,
+            audited_at=n.audited_at,
+        )
+        for n in items
+    ]
+
+    return paginated_response(payload, total=total, page=safe_page, size=safe_size, message="管理员新闻列表")
+
+
+@router.patch("/admin/{news_id}/moderation", response_model=ApiResponse[NewsAdminItemOut])
+async def admin_moderate_news(
+    news_id: int,
+    payload: NewsAdminModerationIn,
+    db: AsyncSession = Depends(get_db),
+    current_admin_user: User = Depends(get_current_admin_user),
+):
+    db_news = await news_crud.get_news_by_id_plain(db, news_id)
+    if not db_news or db_news.is_deleted:
+        raise HTTPException(status_code=404, detail="新闻不存在")
+
+    if payload.category_id is None and payload.audit_status is None and payload.audit_remark is None:
+        raise HTTPException(status_code=400, detail="至少提供一个更新字段")
+
+    if payload.category_id is not None:
+        category = await news_crud.get_category_by_id(db, payload.category_id)
+        if not category:
+            raise HTTPException(status_code=404, detail=f"分类ID {payload.category_id} 不存在")
+
+    if payload.audit_status == "rejected" and not (payload.audit_remark or "").strip():
+        raise HTTPException(status_code=400, detail="拒绝审核时必须填写拒绝原因")
+
+    final_remark = payload.audit_remark
+    if payload.audit_status == "approved":
+        final_remark = None
+
+    old_category_id = db_news.category_id
+
+    try:
+        updated = await news_crud.admin_moderate_news(
+            db,
+            db_news,
+            category_id=payload.category_id,
+            audit_status=payload.audit_status,
+            audit_remark=final_remark,
+            audited_by_user_id=current_admin_user.id if payload.audit_status is not None else None,
+            audited_at=datetime.now() if payload.audit_status is not None else None,
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+
+    # 管理操作后清理缓存，保证前台列表与分类页感知到变更。
+    try:
+        list_keys = await redis_client.keys(f"{NEWS_LIST_CACHE_KEY_PREFIX}:*")
+        if list_keys:
+            await redis_client.delete(*list_keys)
+
+        for cat_id in {old_category_id, updated.category_id}:
+            category_keys = await redis_client.keys(f"{CATEGORY_NEWS_CACHE_KEY_PREFIX}:{cat_id}:*")
+            if category_keys:
+                await redis_client.delete(*category_keys)
+    except Exception as exc:
+        logger.warning("cache clear failed after admin moderate news id=%s, error=%s", updated.id, exc)
+
+    category = await news_crud.get_category_by_id(db, updated.category_id)
+
+    return success_response(
+        NewsAdminItemOut(
+            id=updated.id,
+            title=updated.title,
+            description=updated.description,
+            category_id=updated.category_id,
+            category_name=category.name if category else "未知",
+            author=updated.author,
+            views=updated.views,
+            publish_time=updated.publish_time,
+            image=updated.image,
+            audit_status=updated.audit_status,
+            audit_remark=updated.audit_remark,
+            audited_by_user_id=updated.audited_by_user_id,
+            audited_at=updated.audited_at,
+        ),
+        message="新闻管理更新成功",
+    )
 
 # TODO: Implement news-related endpoints here
 # 现在返回值必须指定为 ApiResponse[具体类型]，以便前端能正确解析 data 字段里的内容。

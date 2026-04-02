@@ -15,5 +15,9 @@ class User(Base):
     gender = Column(Enum('male', 'female', 'unknown'), default='unknown', nullable=True, comment="性别")
     bio = Column(String(500), nullable=True, comment="个人简介")
     phone = Column(String(20), unique=True, nullable=True, comment="手机号")
+    # 后台权限控制核心字段：区分普通用户/审核员/管理员
+    role = Column(Enum('user', 'reviewer', 'admin'), nullable=False, server_default='user', comment="用户角色")
+    # 账号状态字段：可用于后台禁用用户而非直接删库
+    status = Column(Enum('active', 'disabled'), nullable=False, server_default='active', comment="账号状态")
     created_at = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="创建时间")
     updated_at = Column(TIMESTAMP, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新时间")

@@ -6,10 +6,11 @@ import Quill from 'quill'
 import 'quill/dist/quill.snow.css'
 import TopNavBar from '../components/TopNavBar.vue'
 import { useTopNavAuth } from '../composables/useTopNavAuth'
+import { API_BASE_URL } from '../config/api'
 
 const router = useRouter()
 const route = useRoute()
-const API_BASE = 'http://127.0.0.1:8080'
+const API_BASE = API_BASE_URL
 
 const {
   currentUser,
@@ -358,6 +359,10 @@ const submitNews = async () => {
     submitError.value = '请填写新闻标题'
     return
   }
+  if (title.length > 50) {
+    submitError.value = '新闻标题需在50字以内'
+    return
+  }
 
   const category = prepared.category
   if (!category) {
@@ -471,8 +476,8 @@ onBeforeUnmount(() => {
             v-model="form.title"
             class="title-input"
             type="text"
-            placeholder="请输入新闻标题（必填）"
-            maxlength="120"
+            placeholder="请输入新闻标题（必填，50字以内）"
+            maxlength="50"
           />
 
           <div class="category-field">

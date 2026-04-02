@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
+import { withApiBase } from '../config/api'
 
 const props = defineProps({
   currentUser: {
@@ -92,7 +93,7 @@ const fetchSuggestions = async () => {
   }
 
   try {
-    const res = await axios.get('http://127.0.0.1:8080/news/search/suggest', {
+    const res = await axios.get(withApiBase('/news/search/suggest'), {
       params: { q, limit: 5 }
     })
     if (res.data?.code === 200) {
