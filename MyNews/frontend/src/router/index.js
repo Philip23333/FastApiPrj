@@ -22,7 +22,7 @@ const routes = [
     path: '/admin/users',
     name: 'AdminUserManage',
     component: UserManage,
-    meta: { requiresAdmin: true }
+    meta: { requiresBackOffice: true }
   },
   {
     path: '/profile',
@@ -47,7 +47,7 @@ const router = createRouter({
 })
 
 router.beforeEach((to, _, next) => {
-  if (!to.meta?.requiresAdmin) {
+  if (!to.meta?.requiresBackOffice) {
     next()
     return
   }
@@ -60,7 +60,7 @@ router.beforeEach((to, _, next) => {
 
   try {
     const currentUser = JSON.parse(raw)
-    if (currentUser?.role === 'admin') {
+    if (['admin', 'reviewer'].includes(currentUser?.role)) {
       next()
       return
     }

@@ -33,25 +33,53 @@ async def get_categories(db: AsyncSession, skip: int = 0, limit: int = 100):
 
 # 获取总新闻条数
 async def get_news_count(db: AsyncSession):
-    stmt = select(func.count(News.id))
+    stmt = select(func.count(News.id)).where(
+        News.audit_status == 'approved',
+        News.is_deleted.is_(False),
+    )
     result = await db.execute(stmt)
     return result.scalar()
 
 # 获取新闻列表 (分页，倒序，关联分类表防止N+1查询)
 async def get_news(db: AsyncSession, skip: int = 0, limit: int = 10):
-    stmt = select(News).options(joinedload(News.category)).order_by(desc(News.publish_time)).offset(skip).limit(limit)
+    stmt = (
+        select(News)
+        .options(joinedload(News.category))
+        .where(
+            News.audit_status == 'approved',
+            News.is_deleted.is_(False),
+        )
+        .order_by(desc(News.publish_time))
+        .offset(skip)
+        .limit(limit)
+    )
     result = await db.execute(stmt)
     return result.scalars().all()
 
 # 获取某个分类下的新闻总条数
 async def get_news_count_by_category(db: AsyncSession, category_id: int):
-    stmt = select(func.count(News.id)).where(News.category_id == category_id)
+    stmt = select(func.count(News.id)).where(
+        News.category_id == category_id,
+        News.audit_status == 'approved',
+        News.is_deleted.is_(False),
+    )
     result = await db.execute(stmt)
     return result.scalar()
 
 # 获取某个分类下的新闻列表 (分页，倒序，关联分类表防止N+1查询)
 async def get_news_by_category(db: AsyncSession, category_id: int, skip: int = 0, limit: int = 10):
-    stmt = select(News).options(joinedload(News.category)).where(News.category_id == category_id).order_by(desc(News.publish_time)).offset(skip).limit(limit)
+    stmt = (
+        select(News)
+        .options(joinedload(News.category))
+        .where(
+            News.category_id == category_id,
+            News.audit_status == 'approved',
+            News.is_deleted.is_(False),
+        )
+        .order_by(desc(News.publish_time))
+        .offset(skip)
+        .limit(limit)
+    )
     result = await db.execute(stmt)
     return result.scalars().all()
 
@@ -65,7 +93,11 @@ async def get_hot_news(db: AsyncSession, min_views: int = 0, limit: int = 8, off
     stmt = (
         select(News)
         .options(joinedload(News.category))
-        .where(News.views >= min_views)
+        .where(
+            News.views >= min_views,
+            News.audit_status == 'approved',
+            News.is_deleted.is_(False),
+        )
         .order_by(desc(News.views))
         .offset(offset)
         .limit(limit)

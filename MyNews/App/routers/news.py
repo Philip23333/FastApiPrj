@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from config.db_config import get_db
 from crud import news as news_crud
-from dependencies.auth import get_current_admin_user, get_current_user
+from dependencies.auth import get_current_admin_user, get_current_reviewer_or_admin_user, get_current_user
 from models.user import User
 from schemas.news import CategoryOut, HotNewsItemOut, NewsAdminItemOut, NewsAdminModerationIn, NewsCreate, NewsDetailOut, NewsListItemOut, SearchNewsItemOut, SearchSuggestionOut
 from utils.response import ApiResponse, PaginatedData, paginated_response, success_response
@@ -17,16 +17,16 @@ logger = logging.getLogger(__name__)
 # 热门新闻缓存配置
 HOT_CACHE_TTL_SECONDS = 60
 HOT_CACHE_EMPTY_TTL_SECONDS = 20
-HOT_CACHE_KEY_PREFIX = "news:hot:v1"
+HOT_CACHE_KEY_PREFIX = "news:hot:v2"
 
 # 新闻列表/分类缓存配置
 NEWS_LIST_CACHE_TTL_SECONDS = 60
 CATEGORY_LIST_CACHE_TTL_SECONDS = 300
 CATEGORY_NEWS_CACHE_TTL_SECONDS = 60
 LIST_CACHE_EMPTY_TTL_SECONDS = 20
-NEWS_LIST_CACHE_KEY_PREFIX = "news:list:v1"
+NEWS_LIST_CACHE_KEY_PREFIX = "news:list:v2"
 CATEGORY_LIST_CACHE_KEY_PREFIX = "news:categories_list:v1"
-CATEGORY_NEWS_CACHE_KEY_PREFIX = "news:categories_news:v1"
+CATEGORY_NEWS_CACHE_KEY_PREFIX = "news:categories_news:v2"
 
 # 构建热门新闻缓存的 Redis key，包含参数信息以支持不同条件的缓存
 def build_hot_cache_key(min_views: int, page: int, size: int) -> str:
@@ -293,7 +293,7 @@ async def admin_get_news_list(
     size: int = 20,
     audit_status: str | None = None,
     db: AsyncSession = Depends(get_db),
-    current_admin_user: User = Depends(get_current_admin_user),
+    current_admin_user: User = Depends(get_current_reviewer_or_admin_user),
 ):
     _ = current_admin_user
 
@@ -335,7 +335,7 @@ async def admin_moderate_news(
     news_id: int,
     payload: NewsAdminModerationIn,
     db: AsyncSession = Depends(get_db),
-    current_admin_user: User = Depends(get_current_admin_user),
+    current_admin_user: User = Depends(get_current_reviewer_or_admin_user),
 ):
     db_news = await news_crud.get_news_by_id_plain(db, news_id)
     if not db_news or db_news.is_deleted:

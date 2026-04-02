@@ -72,3 +72,22 @@ async def get_current_admin_user(
         )
 
     return current_user
+
+
+async def get_current_reviewer_or_admin_user(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    # 审核后台允许 reviewer/admin 访问，disabled 账号仍禁止。
+    if current_user.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="账号已被禁用",
+        )
+
+    if current_user.role not in {"reviewer", "admin"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="仅审核员或管理员可执行该操作",
+        )
+
+    return current_user

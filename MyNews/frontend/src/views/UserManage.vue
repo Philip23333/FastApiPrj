@@ -19,7 +19,9 @@ const {
 
 const currentPane = ref('users')
 const newsPane = ref('pending')
+const newsSearchKeyword = ref('')
 const BACKEND_BUFFER_SIZE = 50
+const AUDIT_RECORD_CACHE_KEY = 'newsAuditRecordCache'
 
 const loadingUsers = ref(false)
 const loadingNews = ref(false)
@@ -28,6 +30,7 @@ const loadingDetail = ref(false)
 const message = ref('')
 const toastVisible = ref(false)
 const toastMessage = ref('')
+const toastType = ref('success')
 const detailVisible = ref(false)
 const detailError = ref('')
 const detailSummary = ref(null)
@@ -58,24 +61,51 @@ const rejectedNewsHasMore = ref(true)
 const pendingNewsTotal = ref(0)
 const approvedNewsTotal = ref(0)
 const rejectedNewsTotal = ref(0)
+const auditRecordCache = ref({})
 
 const manageableUsers = computed(() => users.value.filter((item) => item.role !== 'admin'))
 const adminUsers = computed(() => users.value.filter((item) => item.role === 'admin'))
 
 const displayedNews = computed(() => (newsPane.value === 'pending' ? pendingNewsList.value : reviewedNewsList.value))
+const normalizedNewsSearchKeyword = computed(() => newsSearchKeyword.value.trim().toLowerCase())
+const filteredDisplayedNews = computed(() => {
+  const keyword = normalizedNewsSearchKeyword.value
+  if (!keyword) {
+    return displayedNews.value
+  }
+  return displayedNews.value.filter((item) => {
+    const haystacks = [
+      item.title,
+      item.author,
+      item.category_name,
+      item.description,
+      String(item.id ?? ''),
+    ]
+      .map((value) => String(value || '').toLowerCase())
+    return haystacks.some((value) => value.includes(keyword))
+  })
+})
 const totalUserPages = computed(() => Math.max(1, Math.ceil(manageableUsers.value.length / userPageSize.value)))
 const pagedUsers = computed(() => {
   const start = (userPage.value - 1) * userPageSize.value
   return manageableUsers.value.slice(start, start + userPageSize.value)
 })
 const currentNewsPage = computed(() => (newsPane.value === 'pending' ? pendingNewsPage.value : reviewedNewsPage.value))
-const totalNewsPages = computed(() => Math.max(1, Math.ceil(displayedNews.value.length / newsPageSize.value)))
+const totalNewsPages = computed(() => Math.max(1, Math.ceil(filteredDisplayedNews.value.length / newsPageSize.value)))
 const pagedDisplayedNews = computed(() => {
   const start = (currentNewsPage.value - 1) * newsPageSize.value
-  return displayedNews.value.slice(start, start + newsPageSize.value)
+  return filteredDisplayedNews.value.slice(start, start + newsPageSize.value)
 })
 const reviewedHasMore = computed(() => approvedNewsHasMore.value || rejectedNewsHasMore.value)
 const reviewedNewsTotal = computed(() => approvedNewsTotal.value + rejectedNewsTotal.value)
+const isAdmin = computed(() => currentUser.value?.role === 'admin')
+const canAuditNews = computed(() => ['admin', 'reviewer'].includes(currentUser.value?.role))
+const heroDescription = computed(() => {
+  if (isAdmin.value) {
+    return '管理员可在此管理用户账号与新闻审核流程。'
+  }
+  return '审核员可在此处理新闻审核与分类调整。'
+})
 
 const roleOptions = [
   { label: '普通用户', value: 'user' },
@@ -86,8 +116,9 @@ const showError = (error, fallback = '请求失败，请稍后重试。') => {
   message.value = error?.response?.data?.message || error?.response?.data?.detail || fallback
 }
 
-const showSuccessToast = (text) => {
+const showSuccessToast = (text, type = 'success') => {
   toastMessage.value = text
+  toastType.value = type
   toastVisible.value = true
   if (toastTimer) {
     clearTimeout(toastTimer)
@@ -97,6 +128,47 @@ const showSuccessToast = (text) => {
     toastMessage.value = ''
     toastTimer = null
   }, 1800)
+}
+
+const loadAuditRecordCache = () => {
+  try {
+    const raw = localStorage.getItem(AUDIT_RECORD_CACHE_KEY)
+    auditRecordCache.value = raw ? JSON.parse(raw) : {}
+  } catch {
+    auditRecordCache.value = {}
+  }
+}
+
+const saveAuditRecordCache = () => {
+  localStorage.setItem(AUDIT_RECORD_CACHE_KEY, JSON.stringify(auditRecordCache.value))
+}
+
+const normalizeAuditRecord = (record) => ({
+  audit_status: record?.audit_status || '-',
+  audit_remark: record?.audit_remark || '无',
+  audited_by_user_id: record?.audited_by_user_id ?? '-',
+  audited_at: record?.audited_at || null,
+})
+
+const mergeAuditRecordsForNews = (newsId, records = []) => {
+  const uniqueMap = new Map()
+  records.forEach((record) => {
+    const normalized = normalizeAuditRecord(record)
+    const key = `${normalized.audited_at || ''}|${normalized.audit_status}|${normalized.audit_remark}|${normalized.audited_by_user_id}`
+    if (!uniqueMap.has(key)) {
+      uniqueMap.set(key, normalized)
+    }
+  })
+
+  const merged = Array.from(uniqueMap.values()).sort((a, b) => {
+    const ta = a.audited_at ? new Date(a.audited_at).getTime() : 0
+    const tb = b.audited_at ? new Date(b.audited_at).getTime() : 0
+    return tb - ta
+  }).slice(0, 3)
+
+  auditRecordCache.value[String(newsId)] = merged
+  saveAuditRecordCache()
+  return merged
 }
 
 const escapeHtml = (raw) => {
@@ -175,6 +247,37 @@ const detailAuditedAt = computed(() => {
   const raw = detailSummary.value?.audited_at || detailData.value?.audited_at
   return raw ? formatDateTime(raw) : '-'
 })
+const detailAuditRecords = computed(() => {
+  const newsId = detailSummary.value?.id || detailData.value?.id
+  if (!newsId) return []
+
+  const serverRecords = Array.isArray(detailData.value?.audit_records)
+    ? detailData.value.audit_records
+    : []
+
+  const latestRecord = (detailSummary.value?.audit_status || detailSummary.value?.audited_at || detailSummary.value?.audit_remark)
+    ? [{
+      audit_status: detailSummary.value?.audit_status,
+      audit_remark: detailSummary.value?.audit_remark,
+      audited_by_user_id: detailSummary.value?.audited_by_user_id,
+      audited_at: detailSummary.value?.audited_at,
+    }]
+    : []
+
+  if (serverRecords.length > 0) {
+    return mergeAuditRecordsForNews(newsId, serverRecords)
+  }
+  const cached = auditRecordCache.value[String(newsId)] || []
+  return mergeAuditRecordsForNews(newsId, [...latestRecord, ...cached])
+})
+
+const onNewsSearchInput = () => {
+  if (newsPane.value === 'pending') {
+    pendingNewsPage.value = 1
+    return
+  }
+  reviewedNewsPage.value = 1
+}
 
 const ensureUserPageInRange = () => {
   userPage.value = Math.min(Math.max(1, userPage.value), totalUserPages.value)
@@ -292,6 +395,21 @@ const mergeUniqueById = (source, incoming) => {
   return Array.from(map.values())
 }
 
+const sortPendingNews = (list) => {
+  list.sort((a, b) => new Date(b.publish_time).getTime() - new Date(a.publish_time).getTime())
+}
+
+const sortReviewedNews = (list) => {
+  list.sort((a, b) => {
+    const ta = a.audited_at ? new Date(a.audited_at).getTime() : 0
+    const tb = b.audited_at ? new Date(b.audited_at).getTime() : 0
+    if (tb !== ta) {
+      return tb - ta
+    }
+    return new Date(b.publish_time).getTime() - new Date(a.publish_time).getTime()
+  })
+}
+
 const fetchUsers = async ({ reset = false } = {}) => {
   if (!reset && (!userHasMore.value || loadingUsers.value)) {
     return
@@ -356,6 +474,7 @@ const fetchPendingNewsBuffer = async ({ reset = false } = {}) => {
   const result = await fetchNewsByStatus('pending', nextPage)
   const incoming = result.items
   pendingNewsList.value = reset ? incoming : mergeUniqueById(pendingNewsList.value, incoming)
+  sortPendingNews(pendingNewsList.value)
   pendingNewsBackendPage.value = nextPage
   pendingNewsHasMore.value = incoming.length === BACKEND_BUFFER_SIZE
   pendingNewsTotal.value = result.total
@@ -385,7 +504,7 @@ const fetchReviewedNewsBuffer = async ({ reset = false } = {}) => {
 
   const reviewedIncoming = [...approvedIncoming, ...rejectedIncoming]
   reviewedNewsList.value = reset ? reviewedIncoming : mergeUniqueById(reviewedNewsList.value, reviewedIncoming)
-  reviewedNewsList.value.sort((a, b) => new Date(b.publish_time).getTime() - new Date(a.publish_time).getTime())
+  sortReviewedNews(reviewedNewsList.value)
 
   if (shouldFetchApproved) {
     approvedNewsBackendPage.value = approvedPage
@@ -435,6 +554,11 @@ const fetchNews = async ({ reset = false } = {}) => {
 }
 
 const refreshCurrentPane = async () => {
+  if (!isAdmin.value) {
+    await fetchNews({ reset: true })
+    return
+  }
+
   if (currentPane.value === 'users') {
     userBackendPage.value = 0
     userHasMore.value = true
@@ -524,7 +648,7 @@ const approveNews = async (item) => {
     const res = await axios.patch(withApiBase(`/news/admin/${item.id}/moderation`), payload)
     if (res.data?.code === 200) {
       showSuccessToast(`已通过《${item.title}》审核`)
-      await fetchNews()
+      await fetchNews({ reset: true })
       return
     }
     message.value = res.data?.message || '审核通过失败。'
@@ -538,7 +662,7 @@ const approveNews = async (item) => {
 const rejectNews = async (item) => {
   const reason = (rejectReasonDraft.value[item.id] || '').trim()
   if (!reason) {
-    message.value = '拒绝审核时请填写拒绝原因。'
+    showSuccessToast('拒绝审核时请填写拒绝原因。', 'danger')
     return
   }
 
@@ -551,8 +675,8 @@ const rejectNews = async (item) => {
     })
     const res = await axios.patch(withApiBase(`/news/admin/${item.id}/moderation`), payload)
     if (res.data?.code === 200) {
-      showSuccessToast(`已拒绝《${item.title}》并记录原因`)
-      await fetchNews()
+      showSuccessToast(`已拒绝《${item.title}》并记录原因`, 'danger')
+      await fetchNews({ reset: true })
       return
     }
     message.value = res.data?.message || '拒绝审核失败。'
@@ -564,18 +688,29 @@ const rejectNews = async (item) => {
 }
 
 onMounted(async () => {
+  loadAuditRecordCache()
   restoreCurrentUser()
   if (!ensureAuthenticated('/')) {
     return
   }
-  if (currentUser.value?.role !== 'admin') {
+  if (!canAuditNews.value) {
     router.replace('/profile')
     return
   }
 
+  if (!isAdmin.value) {
+    currentPane.value = 'news'
+  }
+
   userBackendPage.value = 0
   userHasMore.value = true
-  await Promise.all([fetchUsers({ reset: true }), fetchCategories(), fetchNews({ reset: true })])
+
+  if (isAdmin.value) {
+    await Promise.all([fetchUsers({ reset: true }), fetchCategories(), fetchNews({ reset: true })])
+    return
+  }
+
+  await Promise.all([fetchCategories(), fetchNews({ reset: true })])
 })
 
 onBeforeUnmount(() => {
@@ -601,15 +736,16 @@ onBeforeUnmount(() => {
       <section class="manage-hero">
         <div class="hero-content">
           <h1>后台管理中心</h1>
-          <p>管理员可在此管理用户账号与新闻审核流程。</p>
+          <p>{{ heroDescription }}</p>
         </div>
         <button class="refresh-btn" :disabled="submitting || loadingUsers || loadingNews" @click="refreshCurrentPane">
             <svg t="1775102124981" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="4793" data-spm-anchor-id="a313x.search_index.0.i0.3bb43a81mRVj4Y" width="15" height="15"><path d="M960 630.4c-12.8-3.2-25.6 3.2-32 12.8-76.8 204.8-320 307.2-544 227.2-224-80-342.4-307.2-265.6-512 76.8-204.8 320-307.2 544-227.2 92.8 32 172.8 92.8 224 172.8l-92.8 0c-12.8 0-25.6 9.6-25.6 22.4 0 12.8 9.6 22.4 25.6 22.4l153.6 0c12.8 0 25.6-9.6 25.6-22.4l0-140.8c0-12.8-9.6-22.4-25.6-22.4-12.8 0-25.6 9.6-25.6 22.4l0 89.6c-57.6-86.4-140.8-150.4-246.4-188.8-249.6-86.4-518.4 28.8-608 256-86.4 230.4 44.8 486.4 294.4 572.8 249.6 86.4 518.4-28.8 608-256C979.2 649.6 972.8 636.8 960 630.4z" p-id="4794"></path></svg>
         </button>
       </section>
 
-      <nav class="manage-nav-bar">
+      <nav class="manage-nav-bar" :class="{ 'single-tab': !isAdmin }">
         <button
+          v-if="isAdmin"
           class="manage-nav-item"
           :class="{ active: currentPane === 'users' }"
           @click="currentPane = 'users'"
@@ -683,6 +819,15 @@ onBeforeUnmount(() => {
       <section v-else class="panel">
         <div class="news-head">
           <h2>新闻管理</h2>
+          <div class="news-search">
+            <input
+              v-model="newsSearchKeyword"
+              type="text"
+              maxlength="80"
+              placeholder="搜索标题/作者/分类/摘要"
+              @input="onNewsSearchInput"
+            />
+          </div>
           <div class="news-filter">
             <button
               class="news-tab"
@@ -703,6 +848,7 @@ onBeforeUnmount(() => {
 
         <div v-if="loadingNews" class="placeholder">正在加载新闻审核列表...</div>
         <div v-else-if="displayedNews.length === 0" class="placeholder">当前分组暂无新闻。</div>
+        <div v-else-if="filteredDisplayedNews.length === 0" class="placeholder">没有匹配的新闻，请调整搜索关键词。</div>
 
         <div v-else class="news-cards">
           <article class="news-card" v-for="item in pagedDisplayedNews" :key="item.id">
@@ -748,7 +894,7 @@ onBeforeUnmount(() => {
     </main>
 
     <transition name="toast-fade">
-      <div v-if="toastVisible" class="light-toast">{{ toastMessage }}</div>
+      <div v-if="toastVisible" class="light-toast" :class="{ danger: toastType === 'danger' }">{{ toastMessage }}</div>
     </transition>
 
     <transition name="drawer-fade">
@@ -777,10 +923,15 @@ onBeforeUnmount(() => {
 
             <section class="audit-record-card">
               <h5>审核记录</h5>
-              <p>审核状态：<strong>{{ detailAuditStatus }}</strong></p>
-              <p>拒绝原因：{{ detailAuditRemark }}</p>
-              <p>审核人ID：{{ detailAuditor }}</p>
-              <p>审核时间：{{ detailAuditedAt }}</p>
+              <p v-if="detailAuditRecords.length === 0">暂无审核记录</p>
+              <div v-else class="audit-record-list">
+                <div class="audit-record-item" v-for="(record, index) in detailAuditRecords" :key="`${record.audited_at || 'na'}-${record.audit_status}-${index}`">
+                  <p>审核结果：<strong>{{ record.audit_status }}</strong></p>
+                  <p>原因：{{ record.audit_remark || '无' }}</p>
+                  <p>审核人ID：{{ record.audited_by_user_id ?? '-' }}</p>
+                  <p>审核时间：{{ record.audited_at ? formatDateTime(record.audited_at) : '-' }}</p>
+                </div>
+              </div>
             </section>
           </div>
         </div>
@@ -836,6 +987,10 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: 1fr 1fr;
   overflow: hidden;
+}
+
+.manage-nav-bar.single-tab {
+  grid-template-columns: 1fr;
 }
 
 .manage-nav-item {
@@ -977,6 +1132,21 @@ input {
   align-items: center;
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.news-search {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+.news-search input {
+  width: min(420px, 100%);
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid #d8e0ea;
+  padding: 0 14px;
+  background: #ffffff;
 }
 
 .news-filter {
@@ -1141,6 +1311,12 @@ input {
   backdrop-filter: blur(2px);
 }
 
+.light-toast.danger {
+  background: rgba(239, 68, 68, 0.72);
+  border-color: rgba(254, 202, 202, 0.9);
+  color: #fff1f2;
+}
+
 .toast-fade-enter-active,
 .toast-fade-leave-active {
   transition: opacity 0.28s ease, transform 0.28s ease;
@@ -1255,6 +1431,19 @@ input {
   font-size: 13px;
 }
 
+.audit-record-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.audit-record-item {
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
 .detail-error {
   margin: 0 0 12px;
   color: #b91c1c;
@@ -1321,6 +1510,15 @@ button:disabled {
   .news-head {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .news-search {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .news-search input {
+    width: 100%;
   }
 
   .editor-row {

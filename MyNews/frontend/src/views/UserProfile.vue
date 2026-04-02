@@ -47,10 +47,10 @@ let toastTimer = null
 const displayName = computed(() => profile.value.nickname || profile.value.username || '头条用户')
 const avatarText = computed(() => (displayName.value || '头').slice(0, 1).toUpperCase())
 const profileBio = computed(() => profile.value.bio || '这个人很低调，还没有写简介。')
-const isAdminUser = computed(() => currentUser.value?.role === 'admin')
+const canAccessBackOffice = computed(() => ['admin', 'reviewer'].includes(currentUser.value?.role))
 
 const goToAdminUserManage = () => {
-  if (!isAdminUser.value) return
+  if (!canAccessBackOffice.value) return
   router.push('/admin/users')
 }
 
@@ -512,7 +512,7 @@ onBeforeUnmount(() => {
           </div>
 
           <button
-            v-if="isAdminUser"
+            v-if="canAccessBackOffice"
             class="admin-manage-btn"
             type="button"
             @click="goToAdminUserManage"
