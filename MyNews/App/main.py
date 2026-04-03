@@ -14,6 +14,16 @@ from config.cache_config import redis_client
 
 app = FastAPI()
 
+
+def parse_cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
+    if not raw:
+        # 本地默认允许常用开发地址。
+        return ["http://127.0.0.1:5173", "http://localhost:5173"]
+    if raw == "*":
+        return ["*"]
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
 # --- 确保 static/uploads 目录存在 ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -25,7 +35,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 # --- 添加这段配置，允许前端跨域请求 ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 允许所有人（开发时可以用 *，生产环境建议填前端具体的域名）
+    allow_origins=parse_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],  # 允许所有方法（GET, POST, PUT, DELETE等）
     allow_headers=["*"],
