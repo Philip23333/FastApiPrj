@@ -31,3 +31,8 @@ dist-ssr
 *.bmp
 *.svg
 *.ico
+
+# env files
+.env
+.env.*
+!.env.example
