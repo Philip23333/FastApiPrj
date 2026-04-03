@@ -76,6 +76,21 @@ class NewsAdminItemOut(BaseModel):
     audited_at: Optional[datetime] = None
 
 
+class NewsAuthorItemOut(BaseModel):
+    id: int
+    title: str
+    description: Optional[str] = None
+    category_id: int
+    category_name: str
+    author: Optional[str] = None
+    views: int
+    publish_time: datetime
+    image: Optional[str] = None
+    audit_status: str = "pending"
+    audit_remark: Optional[str] = None
+    audited_at: Optional[datetime] = None
+
+
 class NewsAdminModerationIn(BaseModel):
     category_id: Optional[int] = None
     audit_status: Optional[Literal["pending", "approved", "rejected"]] = None

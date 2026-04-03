@@ -1355,12 +1355,14 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
 }
 
 .detail-header h3 {
   margin: 0;
   color: #0f172a;
   font-size: 18px;
+  min-width: 0;
 }
 
 .drawer-close {
@@ -1376,6 +1378,7 @@ input {
 .detail-body {
   padding: 16px;
   overflow-y: auto;
+  overflow-x: hidden;
   text-align: left;
 }
 
@@ -1384,6 +1387,9 @@ input {
   color: #111827;
   font-size: 22px;
   line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .detail-meta {
@@ -1409,6 +1415,29 @@ input {
   border: 1px solid #e2e8f0;
   border-radius: 10px;
   padding: 12px;
+  max-width: 100%;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.detail-content :deep(*) {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.detail-content :deep(pre),
+.detail-content :deep(code) {
+  white-space: pre-wrap;
+}
+
+.detail-content :deep(img),
+.detail-content :deep(video),
+.detail-content :deep(iframe),
+.detail-content :deep(table) {
+  max-width: 100%;
+  height: auto;
 }
 
 .audit-record-card {

@@ -178,7 +178,7 @@ const loadEditNews = async () => {
   if (!isEditMode.value || !editNewsId.value) return
   loadingEditData.value = true
   try {
-    const res = await axios.get(`${API_BASE}/news/detail/${editNewsId.value}`, {
+    const res = await axios.get(`${API_BASE}/news/editable/${editNewsId.value}`, {
       headers: {
         ...authHeaders(),
       },

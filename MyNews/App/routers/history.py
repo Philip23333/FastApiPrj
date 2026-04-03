@@ -1,6 +1,7 @@
 from dependencies.auth import get_current_user
 from models.user import User
 from crud import history as history_crud
+from crud import news as news_crud
 from config.db_config import get_db
 from fastapi import APIRouter, Depends, HTTPException
 from schemas.history import HistoryListItemOut
@@ -28,11 +29,19 @@ async def get_history(
     history_data = []
 
     for i in items:
+        news = i.news
+        is_removed = bool(news is None or news.is_deleted or news.audit_status == "rejected")
         history_data.append(
             HistoryListItemOut(
                 id=i.id,
                 user_id=i.user_id,
                 news_id=i.news_id,
+                title="新闻已下架" if is_removed else (news.title if news else "新闻已下架"),
+                description="该新闻已下架，暂不可查看详情。" if is_removed else (news.description if news else None),
+                category_name="-" if is_removed else (news.category.name if news and news.category else "未知"),
+                views=0 if is_removed else (news.views if news else 0),
+                image=None if is_removed else (news.image if news else None),
+                is_removed=is_removed,
                 created_at=i.created_at,
                 updated_at=i.updated_at,
                 view_time=i.view_time,
@@ -47,6 +56,9 @@ async def create_history(
     db=Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    news = await news_crud.get_news_by_id_plain(db, news_id)
+    if not news or news.is_deleted or news.audit_status == "rejected":
+        raise HTTPException(status_code=404, detail="新闻已下架")
     
     await history_crud.upsert_history_record(db, user_id=current_user.id, news_id=news_id)
     await db.commit()

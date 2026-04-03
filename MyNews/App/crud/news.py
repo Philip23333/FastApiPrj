@@ -132,7 +132,11 @@ def _build_search_relevance(keyword: str):
 
 async def get_search_count(db: AsyncSession, keyword: str):
     condition = _build_search_condition(keyword)
-    stmt = select(func.count(News.id)).where(condition)
+    stmt = select(func.count(News.id)).where(
+        condition,
+        News.audit_status == 'approved',
+        News.is_deleted.is_(False),
+    )
     result = await db.execute(stmt)
     return result.scalar()
 
@@ -143,7 +147,11 @@ async def search_news(db: AsyncSession, keyword: str, skip: int = 0, limit: int 
     stmt = (
         select(News, relevance)
         .options(joinedload(News.category))
-        .where(condition)
+        .where(
+            condition,
+            News.audit_status == 'approved',
+            News.is_deleted.is_(False),
+        )
         .order_by(desc(relevance), desc(News.publish_time), desc(News.views))
         .offset(skip)
         .limit(limit)
@@ -166,7 +174,11 @@ async def search_news_suggestions(db: AsyncSession, keyword: str, limit: int = 5
 
     stmt = (
         select(News.id, News.title, relevance)
-        .where(condition)
+        .where(
+            condition,
+            News.audit_status == 'approved',
+            News.is_deleted.is_(False),
+        )
         .order_by(desc(relevance), desc(News.views), desc(News.publish_time))
         .limit(limit)
     )
@@ -189,12 +201,24 @@ async def create_news(db: AsyncSession, news_in, category_id: int):
     return new_news
 
 
-async def update_news(db: AsyncSession, db_news: News, news_in, category_id: int):
+async def update_news(
+    db: AsyncSession,
+    db_news: News,
+    news_in,
+    category_id: int,
+    *,
+    reset_audit_on_update: bool = False,
+):
     db_news.title = news_in.title
     db_news.description = news_in.description
     db_news.content = news_in.content
     db_news.image = news_in.image
     db_news.category_id = category_id
+    if reset_audit_on_update:
+        db_news.audit_status = "pending"
+        db_news.audit_remark = None
+        db_news.audited_by_user_id = None
+        db_news.audited_at = None
     await db.flush()
     await db.refresh(db_news)
     return db_news
@@ -238,6 +262,41 @@ async def get_news_for_admin(
     )
     if audit_status:
         stmt = stmt.where(News.audit_status == audit_status)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+async def get_news_count_for_author(
+    db: AsyncSession,
+    *,
+    authors: list[str],
+):
+    stmt = select(func.count(News.id)).where(
+        News.is_deleted.is_(False),
+        News.author.in_(authors),
+    )
+    result = await db.execute(stmt)
+    return result.scalar()
+
+
+async def get_news_for_author(
+    db: AsyncSession,
+    *,
+    authors: list[str],
+    skip: int = 0,
+    limit: int = 20,
+):
+    stmt = (
+        select(News)
+        .options(joinedload(News.category))
+        .where(
+            News.is_deleted.is_(False),
+            News.author.in_(authors),
+        )
+        .order_by(desc(News.publish_time))
+        .offset(skip)
+        .limit(limit)
+    )
     result = await db.execute(stmt)
     return result.scalars().all()
 

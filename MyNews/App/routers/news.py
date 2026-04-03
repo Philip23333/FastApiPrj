@@ -9,7 +9,7 @@ from config.db_config import get_db
 from crud import news as news_crud
 from dependencies.auth import get_current_admin_user, get_current_reviewer_or_admin_user, get_current_user
 from models.user import User
-from schemas.news import CategoryOut, HotNewsItemOut, NewsAdminItemOut, NewsAdminModerationIn, NewsCreate, NewsDetailOut, NewsListItemOut, SearchNewsItemOut, SearchSuggestionOut
+from schemas.news import CategoryOut, HotNewsItemOut, NewsAdminItemOut, NewsAdminModerationIn, NewsAuthorItemOut, NewsCreate, NewsDetailOut, NewsListItemOut, SearchNewsItemOut, SearchSuggestionOut
 from utils.response import ApiResponse, PaginatedData, paginated_response, success_response
 from config.cache_config import redis_client
 
@@ -212,7 +212,13 @@ async def update_news(
 
     old_category_id = db_news.category_id
     try:
-        updated = await news_crud.update_news(db, db_news, news_in, category_id=news_in.category_id)
+        updated = await news_crud.update_news(
+            db,
+            db_news,
+            news_in,
+            category_id=news_in.category_id,
+            reset_audit_on_update=True,
+        )
         await db.commit()
     except Exception:
         await db.rollback()
@@ -242,8 +248,58 @@ async def update_news(
         views=updated.views,
         publish_time=updated.publish_time,
         image=updated.image,
+        audit_status=updated.audit_status,
+        audit_remark=updated.audit_remark,
+        audited_by_user_id=updated.audited_by_user_id,
+        audited_at=updated.audited_at,
+        is_deleted=updated.is_deleted,
     )
-    return success_response(payload, message="新闻更新成功")
+    return success_response(payload, message="新闻已更新并重新提交审核")
+
+
+@router.get("/mine", response_model=ApiResponse[PaginatedData[NewsAuthorItemOut]])
+async def get_my_news(
+    page: int = 1,
+    size: int = 20,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user:
+        raise HTTPException(status_code=401, detail="用户未登录")
+
+    safe_page = max(1, page)
+    safe_size = max(1, min(size, 100))
+    skip = (safe_page - 1) * safe_size
+
+    authors = [current_user.username]
+    if current_user.nickname:
+        authors.append(current_user.nickname)
+
+    # 去重，避免 nickname 与 username 相同导致 in_ 参数重复。
+    authors = list(dict.fromkeys(authors))
+
+    total = await news_crud.get_news_count_for_author(db, authors=authors)
+    items = await news_crud.get_news_for_author(db, authors=authors, skip=skip, limit=safe_size)
+
+    payload = [
+        NewsAuthorItemOut(
+            id=n.id,
+            title=n.title,
+            description=n.description,
+            category_id=n.category_id,
+            category_name=n.category.name if n.category else "未知",
+            author=n.author,
+            views=n.views,
+            publish_time=n.publish_time,
+            image=n.image,
+            audit_status=n.audit_status,
+            audit_remark=n.audit_remark,
+            audited_at=n.audited_at,
+        )
+        for n in items
+    ]
+
+    return paginated_response(payload, total=total, page=safe_page, size=safe_size, message="我的作品列表")
 
 
 @router.delete("/{news_id}", response_model=ApiResponse[None])
@@ -285,6 +341,45 @@ async def delete_news(
         logger.warning("cache clear failed after delete news id=%s, error=%s", news_id, exc)
 
     return success_response(None, message="新闻删除成功")
+
+
+@router.get("/editable/{news_id}", response_model=ApiResponse[NewsDetailOut])
+async def get_editable_news_detail(
+    news_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user:
+        raise HTTPException(status_code=401, detail="用户未登录")
+
+    db_news = await news_crud.get_news_by_id_plain(db, news_id)
+    if not db_news or db_news.is_deleted:
+        raise HTTPException(status_code=404, detail="新闻不存在")
+
+    editable_authors = {current_user.username}
+    if current_user.nickname:
+        editable_authors.add(current_user.nickname)
+    if db_news.author not in editable_authors:
+        raise HTTPException(status_code=403, detail="无权限编辑该新闻")
+
+    payload = NewsDetailOut(
+        id=db_news.id,
+        title=db_news.title,
+        description=db_news.description,
+        content=db_news.content,
+        category_id=db_news.category_id,
+        category_name=db_news.category.name if db_news.category else "未知",
+        author=db_news.author,
+        views=db_news.views,
+        publish_time=db_news.publish_time,
+        image=db_news.image,
+        audit_status=db_news.audit_status,
+        audit_remark=db_news.audit_remark,
+        audited_by_user_id=db_news.audited_by_user_id,
+        audited_at=db_news.audited_at,
+        is_deleted=db_news.is_deleted,
+    )
+    return success_response(payload, message="可编辑新闻详情")
 
 
 @router.get("/admin/list", response_model=ApiResponse[PaginatedData[NewsAdminItemOut]])
@@ -540,7 +635,25 @@ async def get_news_by_id(
     news = await news_crud.get_news_by_id(db, news_id=news_id)
     if not news:
         raise HTTPException(status_code=404, detail="News not found")
+    if news.is_deleted or news.audit_status == "rejected":
+        raise HTTPException(status_code=404, detail="新闻已下架")
     await db.commit()
+
+    # 详情访问会增加浏览量，主动失效列表/分类/热榜缓存，减少前台浏览量展示滞后。
+    try:
+        list_keys = await redis_client.keys(f"{NEWS_LIST_CACHE_KEY_PREFIX}:*")
+        if list_keys:
+            await redis_client.delete(*list_keys)
+
+        category_keys = await redis_client.keys(f"{CATEGORY_NEWS_CACHE_KEY_PREFIX}:*")
+        if category_keys:
+            await redis_client.delete(*category_keys)
+
+        hot_keys = await redis_client.keys(f"{HOT_CACHE_KEY_PREFIX}:*")
+        if hot_keys:
+            await redis_client.delete(*hot_keys)
+    except Exception as exc:
+        logger.warning("cache clear failed after news view increment id=%s, error=%s", news.id, exc)
         
     news_data = NewsDetailOut(
         id=news.id,

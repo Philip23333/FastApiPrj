@@ -1,11 +1,14 @@
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 from models.history import History
+from models.news import News
 
 #  查询所有历史记录
 async def get_history_by_user(db: AsyncSession, user_id: int, offset: int = 0, limit: int = 10):
     stmt = (
         select(History)
+        .options(joinedload(History.news).joinedload(News.category))
         .where(History.user_id == user_id)
         .order_by(History.view_time.desc())
         .offset(offset)

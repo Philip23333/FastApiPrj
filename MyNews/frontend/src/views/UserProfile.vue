@@ -107,8 +107,18 @@ const goToNewsDetail = (id) => {
   router.push(`/news/${id}`)
 }
 
+const isHistoryUnavailable = (item) => Boolean(item?.is_removed)
+
 const goToEditNews = (id) => {
   router.push(`/publish?edit=${id}`)
+}
+
+const auditStatusText = (status) => {
+  if (status === 'approved') return '已通过'
+  if (status === 'rejected') return '未通过'
+  if (status === 'pending') return '待审核'
+  if (status === 'draft') return '草稿'
+  return status || '待审核'
 }
 
 const showToast = (message) => {
@@ -210,16 +220,9 @@ const fetchProfile = async () => {
 const fetchWorks = async () => {
   try {
     loadingWorks.value = true
-    const res = await axios.get(withApiBase('/news/?page=1&size=100'))
+    const res = await axios.get(withApiBase('/news/mine?page=1&size=100'))
     if (res.data?.code === 200) {
-      const allNews = res.data?.data?.items || []
-      const keywordA = profile.value.nickname || ''
-      const keywordB = profile.value.username || ''
-
-      works.value = allNews.filter((item) => {
-        const author = item.author || ''
-        return (keywordA && author === keywordA) || (keywordB && author === keywordB)
-      })
+      works.value = res.data?.data?.items || []
     }
   } catch (error) {
     console.error(error)
@@ -289,23 +292,17 @@ const fetchHistories = async () => {
       return
     }
 
-    const detailRequests = items.map((h) =>
-      axios
-        .get(withApiBase(`/news/detail/${h.news_id}`))
-        .then((detailRes) => {
-          const detail = detailRes.data?.data
-          if (!detail) return null
-          return {
-            ...detail,
-            history_id: h.id,
-            view_time: h.view_time,
-          }
-        })
-        .catch(() => null)
-    )
-
-    const detailResults = await Promise.all(detailRequests)
-    histories.value = detailResults.filter(Boolean)
+    histories.value = items.map((h) => ({
+      id: h.news_id,
+      history_id: h.id,
+      title: h.title,
+      description: h.description,
+      category_name: h.category_name,
+      views: h.views,
+      image: h.image,
+      view_time: h.view_time,
+      is_removed: Boolean(h.is_removed),
+    }))
   } catch (error) {
     console.error(error)
     message.value = '拉取浏览记录失败。'
@@ -375,12 +372,16 @@ const toggleHistorySelection = (newsId) => {
   selectedHistoryNewsIds.value.push(newsId)
 }
 
-const handleHistoryCardClick = (newsId) => {
+const handleHistoryCardClick = (item) => {
   if (historySelectMode.value) {
-    toggleHistorySelection(newsId)
+    toggleHistorySelection(item.id)
     return
   }
-  goToNewsDetail(newsId)
+  if (isHistoryUnavailable(item)) {
+    showToast('新闻已下架，暂不可查看详情。')
+    return
+  }
+  goToNewsDetail(item.id)
 }
 
 const selectAllHistories = () => {
@@ -641,7 +642,9 @@ onBeforeUnmount(() => {
                 <div class="meta">
                   <span>{{ item.category_name }}</span>
                   <span>{{ item.views }} 阅读</span>
+                  <span class="audit-badge" :class="item.audit_status">{{ auditStatusText(item.audit_status) }}</span>
                 </div>
+                <p v-if="item.audit_status === 'rejected'" class="audit-result">审核结果：{{ item.audit_remark || '内容不符合发布要求，请修改后重试。' }}</p>
               </div>
               <img v-if="item.image" :src="normalizeImageUrl(item.image)" alt="cover" class="cover" />
               <div class="works-menu-wrapper" @click.stop>
@@ -698,10 +701,10 @@ onBeforeUnmount(() => {
           <div v-else class="news-list">
             <article
               class="news-item"
-              :class="{ selected: historySelectMode && isHistorySelected(item.id) }"
+              :class="{ selected: historySelectMode && isHistorySelected(item.id), unavailable: !historySelectMode && isHistoryUnavailable(item) }"
               v-for="item in histories"
               :key="item.history_id || item.id"
-              @click="handleHistoryCardClick(item.id)"
+              @click="handleHistoryCardClick(item)"
             >
               <label
                 v-if="historySelectMode"
@@ -719,11 +722,12 @@ onBeforeUnmount(() => {
                 <p class="desc">{{ item.description || (item.content ? item.content.slice(0, 90) + '...' : '') }}</p>
                 <div class="meta">
                   <span>{{ item.category_name || '未分类' }}</span>
-                  <span>{{ item.views }} 阅读</span>
+                  <span v-if="!isHistoryUnavailable(item)">{{ item.views }} 阅读</span>
+                  <span v-else class="removed-tag">新闻已下架</span>
                   <span v-if="item.view_time">浏览于 {{ formatViewTime(item.view_time) }}</span>
                 </div>
               </div>
-              <img v-if="item.image" :src="normalizeImageUrl(item.image)" alt="cover" class="cover" />
+              <img v-if="item.image && !isHistoryUnavailable(item)" :src="normalizeImageUrl(item.image)" alt="cover" class="cover" />
             </article>
           </div>
         </div>
@@ -998,6 +1002,15 @@ onBeforeUnmount(() => {
   padding-left: 1px;
 }
 
+.news-item.unavailable {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.news-item.unavailable:hover .title {
+  color: #222;
+}
+
 .news-main {
   flex: 1;
   min-width: 0;
@@ -1035,6 +1048,46 @@ onBeforeUnmount(() => {
   gap: 12px;
   font-size: 13px;
   color: #8a8f99;
+}
+
+.audit-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid #e2e8f0;
+  padding: 0 8px;
+  height: 22px;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.audit-badge.pending {
+  color: #9a3412;
+  border-color: #fdba74;
+  background: #fff7ed;
+}
+
+.audit-badge.approved {
+  color: #166534;
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.audit-badge.rejected {
+  color: #b91c1c;
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.audit-result {
+  margin: 8px 0 0;
+  color: #b91c1c;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.removed-tag {
+  color: #b91c1c;
 }
 
 .cover {
