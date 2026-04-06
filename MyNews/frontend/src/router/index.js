@@ -5,6 +5,7 @@ import UserManage from '../views/UserManage.vue'
 import UserProfile from '../views/UserProfile.vue'
 import PublishNews from '../views/PublishNews.vue'
 import SearchResults from '../views/SearchResults.vue'
+import AIChat from '../views/AIChat.vue'
 
 const routes = [
   {
@@ -38,6 +39,11 @@ const routes = [
     path: '/search',
     name: 'SearchResults',
     component: SearchResults
+  },
+  {
+    path: '/ai-chat',
+    name: 'AIChat',
+    component: AIChat
   }
 ]
 
