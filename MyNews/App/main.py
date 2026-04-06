@@ -2,11 +2,17 @@
 import os
 from typing import Any
 
+import uvicorn
+from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+
 from routers import favorite, news, users, history, upload
 from config.db_config import async_engine
 from utils.response import ApiResponse, ErrorResponse, ValidationErrorItem, success_response, error_response
@@ -25,7 +31,6 @@ def parse_cors_origins() -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 # --- 确保 static/uploads 目录存在 ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 os.makedirs(os.path.join(STATIC_DIR, "uploads"), exist_ok=True)
 
@@ -78,3 +83,11 @@ app.include_router(users.router)
 app.include_router(favorite.router)
 app.include_router(history.router)
 app.include_router(upload.router)
+
+
+if __name__ == "__main__":
+    host = os.getenv("APP_HOST", "127.0.0.1")
+    port = int(os.getenv("APP_PORT", "8080"))
+    reload_enabled = os.getenv("APP_ENV", "development").lower() == "development"
+
+    uvicorn.run("main:app", host=host, port=port, reload=reload_enabled)
