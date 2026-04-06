@@ -237,7 +237,7 @@ const fetchFavorites = async () => {
 
   loadingFavorites.value = true
   try {
-    const res = await axios.get(withApiBase('/favorites?page=1&size=50'))
+    const res = await axios.get(withApiBase('/favorites/?page=1&size=50'))
     if (res.data?.code !== 200) {
       favorites.value = []
       return
@@ -280,7 +280,7 @@ const fetchHistories = async () => {
 
   loadingHistories.value = true
   try {
-    const res = await axios.get(withApiBase('/history?page=1&size=50'))
+    const res = await axios.get(withApiBase('/history/?page=1&size=50'))
     if (res.data?.code !== 200) {
       histories.value = []
       return
