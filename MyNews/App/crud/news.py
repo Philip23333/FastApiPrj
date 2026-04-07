@@ -301,6 +301,20 @@ async def get_news_for_author(
     return result.scalars().all()
 
 
+async def get_news_for_rag(db: AsyncSession):
+    stmt = (
+        select(News)
+        .options(joinedload(News.category))
+        .where(
+            News.audit_status == 'approved',
+            News.is_deleted.is_(False),
+        )
+        .order_by(desc(News.publish_time))
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
 async def admin_moderate_news(
     db: AsyncSession,
     db_news: News,

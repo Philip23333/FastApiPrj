@@ -19,13 +19,13 @@ class AIClient:
     def is_enabled(self) -> bool:
         return os.getenv("AI_ENABLED", "false").lower() == "true"
 
-    def _build_llm(self, temperature: float) -> ChatOpenAI:
+    def _build_llm(self, temperature: float, timeout: float | None = None) -> ChatOpenAI:
         return ChatOpenAI(
             model=self.model,
             api_key=self.api_key,
             base_url=self.api_base_url,
             temperature=temperature,
-            timeout=self.timeout,
+            timeout=timeout if timeout is not None else self.timeout,
         )
 
     @staticmethod
@@ -44,13 +44,18 @@ class AIClient:
             return "\n".join(parts).strip()
         return str(content).strip()
 
-    async def chat_messages(self, messages: list[BaseMessage], temperature: float = 0.3) -> tuple[str, str]:
+    async def chat_messages(
+        self,
+        messages: list[BaseMessage],
+        temperature: float = 0.3,
+        timeout_seconds: float | None = None,
+    ) -> tuple[str, str]:
         if not self.is_enabled():
             raise AIClientError("AI 功能未启用，请设置 AI_ENABLED=true")
         if not self.api_key:
             raise AIClientError("AI_API_KEY 未配置")
 
-        llm = self._build_llm(temperature=temperature)
+        llm = self._build_llm(temperature=temperature, timeout=timeout_seconds)
         try:
             response = await llm.ainvoke(messages)
         except Exception as exc:

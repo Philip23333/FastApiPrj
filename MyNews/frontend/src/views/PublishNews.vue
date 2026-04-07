@@ -33,6 +33,10 @@ let toastTimer = null
 const loadingEditData = ref(false)
 const initialEditFingerprint = ref(null)
 const hasEditChanges = ref(false)
+const assistantPrompt = ref('')
+const assistantLoading = ref(false)
+const assistantError = ref('')
+const assistantResult = ref(null)
 
 const editNewsId = ref(Number(route.query.edit || 0))
 const isEditMode = ref(editNewsId.value > 0)
@@ -419,6 +423,56 @@ const submitNews = async () => {
   }
 }
 
+const runWritingAssistant = async () => {
+  const demand = assistantPrompt.value.trim()
+  if (!demand || assistantLoading.value) {
+    return
+  }
+
+  assistantError.value = ''
+  assistantLoading.value = true
+  try {
+    const rawHtml = quill?.root?.innerHTML || ''
+    const plain = stripHtml(rawHtml)
+    const response = await axios.post(`${API_BASE}/ai/news/draft/suggest`, {
+      title: form.value.title.trim() || demand.slice(0, 30),
+      category_name: categories.value.find((item) => String(item.id) === form.value.categoryId)?.name || '头条',
+      content: [demand, plain].filter(Boolean).join('\n\n'),
+      description: form.value.description.trim() || null,
+    }, {
+      headers: {
+        ...authHeaders(),
+      },
+    })
+
+    assistantResult.value = response?.data?.data || null
+  } catch (err) {
+    assistantError.value = err.response?.data?.message || err.response?.data?.detail || 'AI写作助手调用失败'
+  } finally {
+    assistantLoading.value = false
+  }
+}
+
+const applyTitleSuggestion = (value) => {
+  if (!value) return
+  form.value.title = value
+}
+
+const applyDescriptionSuggestion = () => {
+  const value = assistantResult.value?.description_suggestion || ''
+  if (!value) return
+  form.value.description = value
+}
+
+const insertSuggestionToEditor = (text) => {
+  if (!quill || !text) return
+  const range = quill.getSelection(true)
+  const insertIndex = range ? range.index : quill.getLength()
+  const content = text.endsWith('\n') ? text : `${text}\n`
+  quill.insertText(insertIndex, content, 'user')
+  quill.setSelection(insertIndex + content.length, 0)
+}
+
 const handlePublishClickFromNav = () => {
   handlePublishClick()
 }
@@ -464,7 +518,8 @@ onBeforeUnmount(() => {
     />
 
     <main class="publish-main">
-      <div class="publish-card">
+      <div class="publish-shell">
+        <div class="publish-card">
         <div class="hero-head">
           <h1>{{ isEditMode ? '编辑新闻' : '新闻发布' }}</h1>
         </div>
@@ -527,6 +582,67 @@ onBeforeUnmount(() => {
           </button>
           <button class="btn" :disabled="submitting" @click="handleCancel">取消</button>
         </div>
+        </div>
+
+        <aside class="assistant-panel">
+          <div class="assistant-head">
+            <h3>AI写作助手</h3>
+            <p>输入你的写作需求，快速生成标题、摘要和正文建议</p>
+          </div>
+
+          <textarea
+            v-model="assistantPrompt"
+            rows="4"
+            class="assistant-input"
+            placeholder="例如：帮我写一篇关于新能源汽车价格战的新闻稿，重点突出消费者影响"
+          ></textarea>
+
+          <button
+            type="button"
+            class="assistant-run"
+            :disabled="assistantLoading"
+            @click="runWritingAssistant"
+          >
+            {{ assistantLoading ? '生成中...' : '生成写作建议' }}
+          </button>
+
+          <p v-if="assistantError" class="assistant-error">{{ assistantError }}</p>
+
+          <div v-if="assistantResult" class="assistant-result">
+            <section v-if="assistantResult.title_suggestions?.length" class="assistant-block">
+              <h4>标题建议</h4>
+              <ul>
+                <li
+                  v-for="(item, idx) in assistantResult.title_suggestions"
+                  :key="`title-${idx}`"
+                  class="assistant-item clickable"
+                  @click="applyTitleSuggestion(item)"
+                >
+                  <span>{{ item }}</span>
+                </li>
+              </ul>
+            </section>
+
+            <section v-if="assistantResult.description_suggestion" class="assistant-block">
+              <h4>摘要建议</h4>
+              <p class="assistant-item clickable" @click="applyDescriptionSuggestion">{{ assistantResult.description_suggestion }}</p>
+            </section>
+
+            <section v-if="assistantResult.content_suggestions?.length" class="assistant-block">
+              <h4>正文建议</h4>
+              <ul>
+                <li
+                  v-for="(item, idx) in assistantResult.content_suggestions"
+                  :key="`content-${idx}`"
+                  class="assistant-item clickable"
+                  @click="insertSuggestionToEditor(item)"
+                >
+                  <p>{{ item }}</p>
+                </li>
+              </ul>
+            </section>
+          </div>
+        </aside>
       </div>
     </main>
 
@@ -535,7 +651,7 @@ onBeforeUnmount(() => {
     </transition>
   </div>
 </template>
-.news-category {
+
 <style scoped>
 .news_category{
   font-size: 16px;
@@ -560,6 +676,132 @@ onBeforeUnmount(() => {
   border-radius: 18px;
   padding: 34px;
   box-shadow: 0 18px 36px rgba(20, 28, 45, 0.1);
+  flex: 1;
+}
+
+.publish-shell {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.assistant-panel {
+  width: 330px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 88px;
+  background: linear-gradient(150deg, #f8fafc 0%, #f1f5f9 100%);
+  color: #1e293b;
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
+  text-align: left;
+}
+
+.assistant-head h3 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.assistant-head p {
+  margin: 8px 0 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.assistant-input {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #f3f4f6;
+  color: #1e293b;
+  resize: vertical;
+  padding: 10px;
+  font-size: 13px;
+}
+
+.assistant-run {
+  margin-top: 10px;
+  width: 100%;
+  height: 36px;
+  border: none;
+  border-radius: 9px;
+  background: linear-gradient(90deg, #0ea5e9, #2563eb);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.assistant-run:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.assistant-error {
+  margin: 10px 0 0;
+  padding: 8px;
+  background: rgba(248, 113, 113, 0.2);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  border-radius: 8px;
+  color: #fecaca;
+  font-size: 12px;
+}
+
+.assistant-result {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.assistant-block {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.assistant-block h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #1e293b;
+}
+
+.assistant-block ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.assistant-block li {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px;
+}
+
+.assistant-block span,
+.assistant-block p {
+  display: block;
+  margin: 0;
+  color: #334155;
+  line-height: 1.5;
+  font-size: 13px;
+}
+
+.assistant-item.clickable {
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.assistant-item.clickable:hover {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  box-shadow: inset 0 0 0 1px #bfdbfe;
 }
 
 .hero-head {
@@ -888,6 +1130,15 @@ onBeforeUnmount(() => {
 @media (max-width: 1200px) {
   .publish-main {
     width: 100%;
+  }
+
+  .publish-shell {
+    flex-direction: column;
+  }
+
+  .assistant-panel {
+    width: 100%;
+    position: static;
   }
 }
 

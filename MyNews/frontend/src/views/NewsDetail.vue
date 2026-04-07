@@ -3,6 +3,7 @@ import { ref, onMounted, watch, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import axios from 'axios'
 import DOMPurify from 'dompurify'
+import { marked } from 'marked'
 import AuthModal from '../components/AuthModal.vue'
 import TopNavBar from '../components/TopNavBar.vue'
 import { useTopNavAuth } from '../composables/useTopNavAuth'
@@ -28,6 +29,11 @@ const errorMsg = ref('')
 const showAuthModal = ref(false)
 const favoriteLoading = ref(false)
 const isFavorited = ref(false)
+const showSummaryDrawer = ref(false)
+const summaryLoading = ref(false)
+const summaryError = ref('')
+const summaryInput = ref('提炼新闻要点，快速了解核心信息')
+const summaryMessages = ref([])
 
 // 相关推荐数据
 const relatedNews = ref([])
@@ -158,6 +164,59 @@ const toggleFavorite = async () => {
   }
 }
 
+const renderSummaryMarkdown = (content) => {
+  const raw = content || ''
+  const parsed = marked.parse(raw, { gfm: true, breaks: true })
+  return DOMPurify.sanitize(typeof parsed === 'string' ? parsed : '')
+}
+
+const sendSummaryQuestion = async (question) => {
+  const text = (question || summaryInput.value || '').trim()
+  if (!text || summaryLoading.value) return
+
+  summaryError.value = ''
+  summaryMessages.value.push({
+    role: 'user',
+    content: text,
+    time: new Date().toLocaleTimeString(),
+  })
+
+  summaryLoading.value = true
+  try {
+    const response = await axios.post(withApiBase(`/ai/news/${newsId.value}/chat`), {
+      question: text,
+      temperature: 0.2,
+    })
+    const data = response?.data?.data || {}
+    summaryMessages.value.push({
+      role: 'assistant',
+      content: data.answer || 'AI未生成总结内容。',
+      model: data.model || '',
+      time: new Date().toLocaleTimeString(),
+    })
+  } catch (err) {
+    summaryError.value = err?.response?.data?.message || err?.response?.data?.detail || 'AI总结失败，请稍后再试'
+  } finally {
+    summaryLoading.value = false
+  }
+}
+
+const openSummaryDrawer = async () => {
+  if (!currentUser.value?.id) {
+    showAuthModal.value = true
+    return
+  }
+  showSummaryDrawer.value = true
+
+  if (summaryMessages.value.length === 0 && !summaryLoading.value) {
+    await sendSummaryQuestion(summaryInput.value)
+  }
+}
+
+const closeSummaryDrawer = () => {
+  showSummaryDrawer.value = false
+}
+
 watch(() => route.params.id, (newId) => {
   if (newId) {
     newsId.value = newId
@@ -272,6 +331,7 @@ const handleAuthSuccessFromModal = async (payload) => {
       </div>
 
       <aside class="right-sidebar">
+
         <!-- 作者信息卡片 -->
         <div class="author-card" v-if="newsItem">
           <div class="author-info">
@@ -284,7 +344,55 @@ const handleAuthSuccessFromModal = async (payload) => {
           <button class="follow-btn">关注</button>
         </div>
       </aside>
+
+      <button class="summary-float-trigger" type="button" @click="openSummaryDrawer">
+        一键总结
+      </button>
     </main>
+
+    <section v-if="showSummaryDrawer" class="summary-chat-window">
+      <section class="summary-drawer">
+        <header>
+          <div>
+            <h3>AI总结对话</h3>
+            <p>{{ newsItem?.title || '' }}</p>
+          </div>
+          <button type="button" class="summary-close" aria-label="收起总结对话" @click="closeSummaryDrawer">×</button>
+        </header>
+
+        <div class="summary-body">
+          <article
+            v-for="(msg, idx) in summaryMessages"
+            :key="`sum-${idx}`"
+            class="summary-chat-item"
+            :class="msg.role"
+          >
+            <div class="summary-chat-meta">
+              <span>{{ msg.role === 'user' ? (currentUser?.nickname || currentUser?.username || '你') : 'AI助手' }}</span>
+              <span>{{ msg.time }}</span>
+              <span v-if="msg.model" class="summary-chat-model">{{ msg.model }}</span>
+            </div>
+            <div v-if="msg.role === 'assistant'" class="summary-chat-content" v-html="renderSummaryMarkdown(msg.content)"></div>
+            <div v-else class="summary-chat-content plain">{{ msg.content }}</div>
+          </article>
+
+          <div v-if="summaryLoading" class="summary-loading">正在生成总结...</div>
+          <p v-if="summaryError" class="summary-error">{{ summaryError }}</p>
+
+          <div class="summary-composer">
+            <textarea
+              v-model="summaryInput"
+              rows="3"
+              placeholder="提炼新闻要点，快速了解核心信息"
+              @keydown.ctrl.enter.prevent="sendSummaryQuestion()"
+            ></textarea>
+            <button type="button" :disabled="summaryLoading" @click="sendSummaryQuestion()">
+              {{ summaryLoading ? '生成中...' : '发送' }}
+            </button>
+          </div>
+        </div>
+      </section>
+    </section>
 
     <AuthModal
       v-model:visible="showAuthModal"
@@ -305,6 +413,7 @@ const handleAuthSuccessFromModal = async (payload) => {
   display: flex;
   align-items: flex-start;
   gap: 20px;
+  position: relative;
 }
 
 /* 1. 左操作面板 */
@@ -539,6 +648,23 @@ const handleAuthSuccessFromModal = async (payload) => {
   width: 320px;
   flex-shrink: 0;
 }
+
+.summary-float-trigger {
+  position: absolute;
+  right: -68px;
+  top: 128px;
+  border: 1px solid #93c5fd;
+  background: #dbeafe;
+  color: #1e3a8a;
+  padding: 18px 12px;
+  border-radius: 10px;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-weight: 900;
+  font-size: 18px;
+  letter-spacing: 2px;
+  cursor: pointer;
+}
 .author-card {
   background: #f8f9fa;
   padding: 20px;
@@ -590,5 +716,166 @@ const handleAuthSuccessFromModal = async (payload) => {
   padding: 100px;
   color: #999;
   font-size: 18px;
+}
+
+.summary-chat-window {
+  position: fixed;
+  right: 24px;
+  top: 168px;
+  width: min(600px, 48vw);
+  height: min(80vh, 950px);
+  z-index: 1200;
+}
+
+.summary-drawer {
+  width: 100%;
+  height: 100%;
+  background: #fff;
+  box-shadow: 0 20px 30px rgba(15, 23, 42, 0.24);
+  border-radius: 14px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  padding: 15px;
+}
+
+.summary-drawer header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.summary-drawer h3 {
+  margin: 0;
+}
+
+.summary-drawer header p {
+  margin: 6px 0 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.summary-close {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #111827;
+  border-radius: 8px;
+  width: 34px;
+  height: 34px;
+  font-size: 22px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+}
+
+.summary-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+  text-align: left;
+}
+
+.summary-loading {
+  color: #334155;
+}
+
+.summary-error {
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.summary-chat-item {
+  background: #fff;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.summary-chat-item.user {
+  background: #eef6ff;
+  border-color: #bfd8ff;
+}
+
+.summary-chat-meta {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.summary-chat-model {
+  color: #2563eb;
+}
+
+.summary-chat-content {
+  color: #334155;
+  line-height: 1.65;
+  word-break: break-word;
+}
+
+.summary-chat-content :deep(*) {
+  text-align: left;
+}
+
+.summary-chat-content.plain {
+  white-space: pre-wrap;
+}
+
+.summary-composer {
+  margin-top: 12px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 12px;
+}
+
+.summary-composer textarea {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  background: #f1f5f9;
+  color: #111827;
+  border-radius: 8px;
+  resize: vertical;
+  padding: 10px;
+  font-size: 14px;
+}
+
+.summary-composer button {
+  margin-top: 8px;
+  border: none;
+  background: #1d4ed8;
+  color: #fff;
+  border-radius: 8px;
+  height: 34px;
+  padding: 0 14px;
+  cursor: pointer;
+}
+
+@media (max-width: 1240px) {
+  .summary-float-trigger {
+    right: 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .summary-chat-window {
+    right: 8px;
+    left: 8px;
+    width: auto;
+    top: 148px;
+    height: 66vh;
+  }
 }
 </style>

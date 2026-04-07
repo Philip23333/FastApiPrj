@@ -6,6 +6,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 from services.ai.client import AIClient
 from services.ai.prompts import (
     build_draft_suggest_messages,
+    build_news_chat_messages,
     build_summary_messages,
 )
 from schemas.ai import AINewsDraftSuggestIn, AINewsDraftSuggestOut, AINewsSummaryOut
@@ -73,4 +74,31 @@ class AIService:
                 content_suggestions=content_suggestions,
             ),
             model,
+        )
+
+    async def chat_about_news(
+        self,
+        *,
+        title: str,
+        description: str | None,
+        content: str,
+        question: str,
+        temperature: float = 0.2,
+    ) -> tuple[str, str]:
+        # 新闻正文可能很长，先做输入压缩，降低超时风险。
+        safe_content = (content or "").strip()
+        max_chars = 6000
+        if len(safe_content) > max_chars:
+            safe_content = safe_content[:max_chars] + "\n\n[正文过长，已截断后进行总结]"
+
+        messages = build_news_chat_messages(
+            title=title,
+            description=description,
+            content=safe_content,
+            question=question,
+        )
+        return await self.client.chat_messages(
+            messages=messages,
+            temperature=temperature,
+            timeout_seconds=90,
         )

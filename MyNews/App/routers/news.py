@@ -10,6 +10,7 @@ from crud import news as news_crud
 from dependencies.auth import get_current_admin_user, get_current_reviewer_or_admin_user, get_current_user
 from models.user import User
 from schemas.news import CategoryOut, HotNewsItemOut, NewsAdminItemOut, NewsAdminModerationIn, NewsAuthorItemOut, NewsCreate, NewsDetailOut, NewsListItemOut, SearchNewsItemOut, SearchSuggestionOut
+from services.ai.rag_service import rag_service
 from utils.response import ApiResponse, PaginatedData, paginated_response, success_response
 from config.cache_config import redis_client
 
@@ -237,6 +238,12 @@ async def update_news(
     except Exception as exc:
         logger.warning("cache clear failed after update news id=%s, error=%s", updated.id, exc)
 
+    # 作者编辑后会重新进入 pending，向量库需移除旧片段。
+    try:
+        await rag_service.sync_news_index(db, updated.id)
+    except Exception as exc:
+        logger.warning("rag incremental sync failed after update news id=%s, error=%s", updated.id, exc)
+
     payload = NewsDetailOut(
         id=updated.id,
         title=updated.title,
@@ -339,6 +346,12 @@ async def delete_news(
             await redis_client.delete(*category_keys)
     except Exception as exc:
         logger.warning("cache clear failed after delete news id=%s, error=%s", news_id, exc)
+
+    # 删除新闻后同步删除向量索引中的历史片段。
+    try:
+        await rag_service.sync_news_index(db, news_id)
+    except Exception as exc:
+        logger.warning("rag incremental sync failed after delete news id=%s, error=%s", news_id, exc)
 
     return success_response(None, message="新闻删除成功")
 
@@ -480,6 +493,13 @@ async def admin_moderate_news(
                 await redis_client.delete(*category_keys)
     except Exception as exc:
         logger.warning("cache clear failed after admin moderate news id=%s, error=%s", updated.id, exc)
+
+    # 审核或分类变更后执行增量同步：approved 时 upsert，其它状态时删除索引。
+    if payload.audit_status is not None or payload.category_id is not None:
+        try:
+            await rag_service.sync_news_index(db, updated.id)
+        except Exception as exc:
+            logger.warning("rag incremental sync failed after moderation news id=%s, error=%s", updated.id, exc)
 
     category = await news_crud.get_category_by_id(db, updated.category_id)
 

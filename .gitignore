@@ -32,3 +32,15 @@ Thumbs.db
 
 # --- markdown ---
 *.md
+
+# --- qdrant ---
+qdrant_storage/
+
+# --- 图片 ---
+*.jpg
+*.jpeg
+*.png
+*.gif
+
+# --- test测试文件 ---
+test/
