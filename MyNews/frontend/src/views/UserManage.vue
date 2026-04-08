@@ -35,6 +35,15 @@ const detailVisible = ref(false)
 const detailError = ref('')
 const detailSummary = ref(null)
 const detailData = ref(null)
+const ragStatus = ref(null)
+const ragChunks = ref([])
+const ragLoading = ref(false)
+const ragActionLoading = ref(false)
+const ragMessage = ref('')
+const ragPage = ref(1)
+const ragPageSize = ref(8)
+const ragTotal = ref(0)
+const ragFilterNewsId = ref('')
 let toastTimer = null
 
 const users = ref([])
@@ -98,6 +107,7 @@ const pagedDisplayedNews = computed(() => {
 })
 const reviewedHasMore = computed(() => approvedNewsHasMore.value || rejectedNewsHasMore.value)
 const reviewedNewsTotal = computed(() => approvedNewsTotal.value + rejectedNewsTotal.value)
+const ragTotalPages = computed(() => Math.max(1, Math.ceil(ragTotal.value / ragPageSize.value)))
 const isAdmin = computed(() => currentUser.value?.role === 'admin')
 const canAuditNews = computed(() => ['admin', 'reviewer'].includes(currentUser.value?.role))
 const heroDescription = computed(() => {
@@ -566,7 +576,110 @@ const refreshCurrentPane = async () => {
     await fetchUsers({ reset: true })
     return
   }
+  if (currentPane.value === 'vector') {
+    ragPage.value = 1
+    await Promise.all([fetchRagStatus(), fetchRagChunks()])
+    return
+  }
   await fetchNews({ reset: true })
+}
+
+const fetchRagStatus = async () => {
+  ragMessage.value = ''
+  try {
+    const res = await axios.get(withApiBase('/ai/rag/index/status'))
+    if (res.data?.code === 200) {
+      ragStatus.value = res.data.data || null
+      return
+    }
+    ragMessage.value = res.data?.message || '拉取向量库状态失败。'
+  } catch (error) {
+    ragMessage.value = error?.response?.data?.message || error?.response?.data?.detail || '拉取向量库状态失败。'
+  }
+}
+
+const fetchRagChunks = async () => {
+  ragLoading.value = true
+  ragMessage.value = ''
+  try {
+    const params = {
+      page: ragPage.value,
+      size: ragPageSize.value,
+    }
+    const newsId = Number(ragFilterNewsId.value)
+    if (!Number.isNaN(newsId) && newsId > 0) {
+      params.news_id = newsId
+    }
+
+    const res = await axios.get(withApiBase('/ai/rag/chunks'), { params })
+    if (res.data?.code === 200) {
+      const payload = res.data.data || {}
+      ragChunks.value = payload.items || []
+      ragTotal.value = Number(payload.total || 0)
+      ragPage.value = Number(payload.page || 1)
+      return
+    }
+    ragMessage.value = res.data?.message || '拉取向量切片失败。'
+  } catch (error) {
+    ragMessage.value = error?.response?.data?.message || error?.response?.data?.detail || '拉取向量切片失败。'
+  } finally {
+    ragLoading.value = false
+  }
+}
+
+const rebuildRagIndex = async () => {
+  ragActionLoading.value = true
+  ragMessage.value = ''
+  try {
+    const res = await axios.post(withApiBase('/ai/rag/index/rebuild'))
+    if (res.data?.code === 200) {
+      showSuccessToast('向量索引重建完成')
+      await Promise.all([fetchRagStatus(), fetchRagChunks()])
+      return
+    }
+    ragMessage.value = res.data?.message || '重建向量索引失败。'
+  } catch (error) {
+    ragMessage.value = error?.response?.data?.message || error?.response?.data?.detail || '重建向量索引失败。'
+  } finally {
+    ragActionLoading.value = false
+  }
+}
+
+const clearRagIndex = async () => {
+  ragActionLoading.value = true
+  ragMessage.value = ''
+  try {
+    const res = await axios.delete(withApiBase('/ai/rag/index'))
+    if (res.data?.code === 200) {
+      showSuccessToast('向量索引已清空', 'danger')
+      ragChunks.value = []
+      ragTotal.value = 0
+      await fetchRagStatus()
+      return
+    }
+    ragMessage.value = res.data?.message || '清空向量索引失败。'
+  } catch (error) {
+    ragMessage.value = error?.response?.data?.message || error?.response?.data?.detail || '清空向量索引失败。'
+  } finally {
+    ragActionLoading.value = false
+  }
+}
+
+const applyRagFilter = async () => {
+  ragPage.value = 1
+  await fetchRagChunks()
+}
+
+const prevRagPage = async () => {
+  if (ragPage.value <= 1) return
+  ragPage.value -= 1
+  await fetchRagChunks()
+}
+
+const nextRagPage = async () => {
+  if (ragPage.value >= ragTotalPages.value) return
+  ragPage.value += 1
+  await fetchRagChunks()
 }
 
 const updateUserRole = async (target) => {
@@ -759,6 +872,14 @@ onBeforeUnmount(() => {
         >
           新闻管理
         </button>
+        <button
+          v-if="isAdmin"
+          class="manage-nav-item"
+          :class="{ active: currentPane === 'vector' }"
+          @click="currentPane = 'vector'; fetchRagStatus(); fetchRagChunks()"
+        >
+          向量库管理
+        </button>
       </nav>
 
       <p v-if="message" class="message">{{ message }}</p>
@@ -816,7 +937,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section v-else class="panel">
+      <section v-else-if="currentPane === 'news'" class="panel">
         <div class="news-head">
           <h2>新闻管理</h2>
           <div class="news-search">
@@ -889,6 +1010,67 @@ onBeforeUnmount(() => {
             <span>第 {{ currentNewsPage }} / {{ totalNewsPages }} 页</span>
             <button :disabled="currentNewsPage >= totalNewsPages && !(newsPane === 'pending' ? pendingNewsHasMore : reviewedHasMore)" @click="nextNewsPage">下一页</button>
           </div>
+        </div>
+      </section>
+
+      <section v-else class="panel">
+        <div class="vector-head">
+          <h2>向量数据库管理</h2>
+          <div class="vector-actions">
+            <button class="vector-btn" :disabled="ragActionLoading" @click="rebuildRagIndex">重建索引</button>
+            <button class="vector-btn danger" :disabled="ragActionLoading" @click="clearRagIndex">清空索引</button>
+          </div>
+        </div>
+
+        <p v-if="ragMessage" class="message">{{ ragMessage }}</p>
+
+        <div class="vector-status" v-if="ragStatus">
+          <div class="status-item">新闻数：{{ ragStatus.indexed_news_count }}</div>
+          <div class="status-item">切片数：{{ ragStatus.indexed_chunk_count }}</div>
+          <div class="status-item">Embedding模型：{{ ragStatus.embedding_model }}</div>
+          <div class="status-item">Chunk配置：{{ ragStatus.chunk_size }} / overlap {{ ragStatus.chunk_overlap }}</div>
+          <div class="status-item">最近重建：{{ ragStatus.last_rebuild_at ? formatDateTime(ragStatus.last_rebuild_at) : '-' }}</div>
+        </div>
+
+        <div class="vector-filter-row">
+          <input
+            v-model="ragFilterNewsId"
+            type="text"
+            placeholder="按新闻ID筛选切片（可选）"
+          />
+          <button class="vector-btn" :disabled="ragLoading" @click="applyRagFilter">筛选</button>
+        </div>
+
+        <div v-if="ragLoading" class="placeholder">正在加载向量切片...</div>
+        <div v-else-if="ragChunks.length === 0" class="placeholder">暂无切片数据。</div>
+
+        <div v-else class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>point_id</th>
+                <th>news_id</th>
+                <th>标题</th>
+                <th>切片序号</th>
+                <th>片段</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in ragChunks" :key="row.point_id">
+                <td class="mono">{{ row.point_id }}</td>
+                <td>{{ row.news_id }}</td>
+                <td>{{ row.title || '-' }}</td>
+                <td>{{ row.chunk_index }}</td>
+                <td class="snippet-col">{{ row.snippet }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="pager">
+          <button :disabled="ragPage <= 1 || ragLoading" @click="prevRagPage">上一页</button>
+          <span>第 {{ ragPage }} / {{ ragTotalPages }} 页（共 {{ ragTotal }} 条）</span>
+          <button :disabled="ragPage >= ragTotalPages || ragLoading" @click="nextRagPage">下一页</button>
         </div>
       </section>
     </main>
@@ -984,16 +1166,16 @@ onBeforeUnmount(() => {
   background: #ffffff;
   border: 1px solid #e7ebf0;
   border-radius: 10px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
   overflow: hidden;
 }
 
 .manage-nav-bar.single-tab {
-  grid-template-columns: 1fr;
+  display: block;
 }
 
 .manage-nav-item {
+  flex: 1;
   height: 44px;
   border: none;
   background: #fff;
@@ -1174,6 +1356,73 @@ input {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.vector-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.vector-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.vector-btn {
+  border: 1px solid #d7dee7;
+  background: #fff;
+  color: #334155;
+  border-radius: 8px;
+  height: 34px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.vector-btn.danger {
+  border-color: #fecaca;
+  color: #b91c1c;
+  background: #fff1f2;
+}
+
+.vector-status {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(200px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.status-item {
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  color: #334155;
+  font-size: 13px;
+}
+
+.vector-filter-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.vector-filter-row input {
+  flex: 1;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.snippet-col {
+  max-width: 380px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .news-card {

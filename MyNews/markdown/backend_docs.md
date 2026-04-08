@@ -104,7 +104,7 @@ MyNews 后端是一个基于 Python FastAPI 框架构建的高性能异步 Web A
 3. **`exclude_unset=True`**: 仅提取被用户明确赋值的内容。
    - **用途**：`user_update.dict(exclude_unset=True)` 用于更新场景。防止像 `nickname=None` 这样默认生成的 `None` 值错误覆盖掉数据库中原本有值的栏位。它能确保“请求发来什么字段就只更新什么字段”。
 
-4. **`orm_mode = True` 与 `.from_orm()`**: 连携使用。处理响应输出机制。
+4. **`from_attributes = True` 与 `.from_orm()`**: 连携使用。处理响应输出机制。
    - **说明点**: SQLAlchemy 查询结果是“Object”而非字典。将内部类 `Config` 配置打开后，`Pydantic` 允许直接去解析 Object 中相应的点 `.` 属性。
    - **用途**：`UserOut.from_orm(db_user).dict()` 直接把后端查出的带有各种脏数据/隐私数据和级联查询的 `db_user` 对象，过滤切片转化为结构干净安全的 API 返回明文字典。
    - *(注：Pydantic V2 会将对应的方法变更为 `model_dump()`, 配置名改为 `model_config={"from_attributes": True}`, 解析方法变为 `model_validate()`)*

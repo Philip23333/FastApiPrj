@@ -1,5 +1,6 @@
 # FastAPI Application
 import os
+from contextlib import asynccontextmanager
 from typing import Any
 
 import uvicorn
@@ -11,14 +12,42 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
 
-from routers import favorite, news, users, history, upload
+
+def resolve_env_file() -> str:
+    explicit = os.getenv("ENV_FILE", "").strip()
+    if explicit:
+        return explicit if os.path.isabs(explicit) else os.path.join(BASE_DIR, explicit)
+
+    candidates = [
+        os.path.join(BASE_DIR, ".env"),
+        os.path.join(BASE_DIR, ".env.production"),
+        os.path.join(BASE_DIR, ".env.develop"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return os.path.join(BASE_DIR, ".env")
+
+
+load_dotenv(resolve_env_file())
+
+from routers import ai, favorite, news, users, history, upload
 from config.db_config import async_engine
 from utils.response import ApiResponse, ErrorResponse, ValidationErrorItem, success_response, error_response
 from config.cache_config import redis_client
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    try:
+        yield
+    finally:
+        await redis_client.close()
+        await async_engine.dispose()
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 def parse_cors_origins() -> list[str]:
@@ -72,17 +101,12 @@ async def validation_exception_handler(_: Request, exc: RequestValidationError):
     )
 
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    await redis_client.close()
-    await async_engine.dispose()
-
-
 app.include_router(news.router)
 app.include_router(users.router)
 app.include_router(favorite.router)
 app.include_router(history.router)
 app.include_router(upload.router)
+app.include_router(ai.router)
 
 
 if __name__ == "__main__":

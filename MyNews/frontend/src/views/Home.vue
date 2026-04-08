@@ -1,7 +1,9 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, nextTick, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
+import DOMPurify from 'dompurify'
+import { marked } from 'marked'
 import AuthModal from '../components/AuthModal.vue'
 import TopNavBar from '../components/TopNavBar.vue'
 import { useTopNavAuth } from '../composables/useTopNavAuth'
@@ -41,6 +43,109 @@ const hotSpinning = ref(false)
 const canRefreshHot = ref(true)
 const hotRefreshCooldownMs = 1000
 const hotRefreshMinSpinMs = 500
+
+const showAIPanel = ref(false)
+const qaQuestion = ref('')
+const qaLoading = ref(false)
+const qaError = ref('')
+const qaMessages = ref([])
+const qaListRef = ref(null)
+const showCitationDetail = ref(false)
+const activeCitation = ref(null)
+
+const askerId = computed(() => {
+  const nickname = (currentUser.value?.nickname || '').trim()
+  if (nickname) return nickname
+  const username = (currentUser.value?.username || '').trim()
+  if (username) return username
+  return '访客'
+})
+
+const renderMarkdown = (content) => {
+  const parsed = marked.parse(content || '', {
+    gfm: true,
+    breaks: true,
+  })
+  const html = typeof parsed === 'string' ? parsed : ''
+  return DOMPurify.sanitize(html)
+}
+
+const shortTitle = (title) => {
+  const value = String(title || '').trim()
+  if (!value) return '未命名来源'
+  return value.length > 10 ? `${value.slice(0, 10)}...` : value
+}
+
+const formatSimilarity = (score) => {
+  const value = Number(score || 0)
+  if (!Number.isFinite(value)) return '0.00'
+  return value.toFixed(3)
+}
+
+const openCitationDetail = (citation) => {
+  activeCitation.value = citation
+  showCitationDetail.value = true
+}
+
+const closeCitationDetail = () => {
+  showCitationDetail.value = false
+  activeCitation.value = null
+}
+
+const openAIPanel = () => {
+  if (!currentUser.value?.id) {
+    showAuthModal.value = true
+    return
+  }
+  showAIPanel.value = true
+}
+
+const closeAIPanel = () => {
+  showAIPanel.value = false
+}
+
+const scrollQaToBottom = async () => {
+  await nextTick()
+  const el = qaListRef.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+}
+
+const askRagQuestion = async () => {
+  const question = qaQuestion.value.trim()
+  if (!question || qaLoading.value) return
+
+  qaError.value = ''
+  qaMessages.value.push({
+    role: 'user',
+    content: question,
+    askerId: askerId.value,
+    time: new Date().toLocaleTimeString(),
+  })
+  qaQuestion.value = ''
+  await scrollQaToBottom()
+
+  qaLoading.value = true
+  try {
+    const response = await axios.post(withApiBase('/ai/qa'), {
+      question,
+      top_k: 4,
+    })
+    const data = response?.data?.data || {}
+    qaMessages.value.push({
+      role: 'assistant',
+      content: data.answer || '暂时没有生成回答。',
+      citations: Array.isArray(data.citations) ? data.citations : [],
+      model: data.model || '',
+      time: new Date().toLocaleTimeString(),
+    })
+    await scrollQaToBottom()
+  } catch (err) {
+    qaError.value = err?.response?.data?.message || err?.response?.data?.detail || 'AI问答失败，请稍后重试'
+  } finally {
+    qaLoading.value = false
+  }
+}
 
 // 获取分类标签
 const fetchCategories = async () => {
@@ -325,6 +430,82 @@ const handlePublishClickFromNav = () => {
       v-model:visible="showAuthModal"
       @success="handleAuthSuccess"
     />
+
+    <button v-if="!showAIPanel" class="ai-float-btn" type="button" @click="openAIPanel" title="AI问答助手">
+      <span class="ai-float-icon">AI</span>
+    </button>
+
+    <section v-if="showAIPanel" class="ai-chat-window">
+      <div class="ai-panel">
+        <header class="ai-panel-head">
+          <div>
+            <h3>AI问答助手</h3>
+            <p>回答基于向量库检索结果，并附带来源</p>
+          </div>
+          <button type="button" class="ai-close" aria-label="收起聊天窗口" @click="closeAIPanel">×</button>
+        </header>
+
+        <div ref="qaListRef" class="ai-chat-list">
+          <div v-if="qaMessages.length === 0" class="ai-empty">输入问题开始提问，例如：今天体育热点有哪些？</div>
+          <article
+            v-for="(msg, idx) in qaMessages"
+            :key="`qa-${idx}`"
+            class="ai-msg"
+            :class="msg.role"
+          >
+            <div class="ai-msg-meta">
+              <span>{{ msg.role === 'user' ? msg.askerId || askerId : 'AI助手' }}</span>
+              <span>{{ msg.time }}</span>
+              <span v-if="msg.model" class="ai-model">{{ msg.model }}</span>
+            </div>
+            <div
+              v-if="msg.role === 'assistant'"
+              class="ai-msg-content markdown-content"
+              v-html="renderMarkdown(msg.content)"
+            ></div>
+            <div v-else class="ai-msg-content">{{ msg.content }}</div>
+
+            <div v-if="msg.role === 'assistant' && msg.citations?.length" class="citation-links">
+              <button
+                v-for="(cite, cIdx) in msg.citations"
+                :key="`cite-${idx}-${cIdx}`"
+                type="button"
+                class="citation-link"
+                @click="openCitationDetail(cite)"
+              >
+                {{ shortTitle(cite.title) }} · {{ formatSimilarity(cite.score) }}
+              </button>
+            </div>
+          </article>
+        </div>
+
+        <p v-if="qaError" class="ai-error">{{ qaError }}</p>
+
+        <footer class="ai-composer">
+          <textarea
+            v-model="qaQuestion"
+            rows="3"
+            placeholder="请输入你的问题，Ctrl+Enter发送"
+            @keydown.ctrl.enter.prevent="askRagQuestion"
+          ></textarea>
+          <button type="button" :disabled="qaLoading" @click="askRagQuestion">
+            {{ qaLoading ? '思考中...' : '发送问题' }}
+          </button>
+        </footer>
+      </div>
+    </section>
+
+    <div v-if="showCitationDetail" class="citation-detail-overlay" @click.self="closeCitationDetail">
+      <div class="citation-detail-card">
+        <div class="citation-detail-head">
+          <h4>来源详情</h4>
+          <button type="button" @click="closeCitationDetail" class="ai-close" >×</button>
+        </div>
+        <p class="citation-detail-title">{{ activeCitation?.title || '未命名新闻' }}</p>
+        <p class="citation-detail-score">相似度：{{ formatSimilarity(activeCitation?.score) }}</p>
+        <div class="citation-detail-snippet">{{ activeCitation?.snippet || '无摘要片段' }}</div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -635,6 +816,303 @@ body {
   color: #999;
   text-align: center;
   padding: 8px 0 4px;
+}
+
+.ai-float-btn {
+  position: fixed;
+  right: 24px;
+  top: 96px;
+  width: 62px;
+  height: 62px;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #0ea5e9, #2563eb);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 12px 28px rgba(14, 116, 230, 0.35);
+  z-index: 1250;
+}
+
+.ai-float-icon {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+
+.ai-chat-window {
+  position: fixed;
+  right: 0;
+  top: 76px;
+  bottom: 0;
+  width: min(620px, 48vw);
+  z-index: 1240;
+}
+
+.ai-panel {
+  width: 100%;
+  height: 100%;
+  background: #fff;
+  color: #111827;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.2);
+  border-radius: 0;
+  overflow: hidden;
+  text-align: left;
+  border-radius: 10px;
+}
+
+.ai-panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.ai-panel-head h3 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.ai-panel-head p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.ai-close {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #111827;
+  border-radius: 8px;
+  height: 34px;
+  width: 34px;
+  font-size: 22px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+}
+
+.ai-chat-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px;
+  background: linear-gradient(180deg, #f8fbff 0%, #f9fafb 100%);
+  text-align: left;
+}
+
+.ai-empty {
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  padding: 12px;
+  color: #64748b;
+  background: #fff;
+}
+
+.ai-msg {
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+
+.ai-msg.user {
+  background: #e6f3ff;
+  border: 1px solid #bfdbfe;
+}
+
+.ai-msg.assistant {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+}
+
+.ai-msg-meta {
+  display: flex;
+  gap: 8px;
+  color: #64748b;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.ai-model {
+  color: #2563eb;
+}
+
+.ai-msg-content {
+  white-space: pre-wrap;
+  line-height: 1.55;
+  color: #1e293b;
+}
+
+.markdown-content :deep(*) {
+  text-align: left;
+}
+
+.markdown-content :deep(p) {
+  margin: 0 0 8px;
+}
+
+.markdown-content :deep(ul),
+.markdown-content :deep(ol) {
+  padding-left: 20px;
+  margin: 0 0 8px;
+}
+
+.markdown-content :deep(pre) {
+  background: #f1f5f9;
+  border-radius: 8px;
+  padding: 10px;
+  overflow-x: auto;
+}
+
+.citation-links {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.citation-link {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.citation-link:hover {
+  border-color: #60a5fa;
+  background: #dbeafe;
+}
+
+.citation-detail-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  background: rgba(15, 23, 42, 0.28);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.citation-detail-card {
+  color: #000;
+  width: min(560px, calc(100vw - 24px));
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.28);
+  padding: 30px;
+  text-align: left;
+}
+
+.citation-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.citation-detail-head h4 {
+  margin: 0;
+}
+
+.citation-detail-head button {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  border-radius: 8px;
+  height: 32px;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.citation-detail-title {
+  margin: 10px 0 6px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.citation-detail-score {
+  margin: 0 0 10px;
+  color: #2563eb;
+  font-size: 13px;
+}
+
+.citation-detail-snippet {
+  white-space: pre-wrap;
+  line-height: 1.65;
+  color: #334155;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.ai-error {
+  margin: 0;
+  padding: 10px 14px;
+  color: #b91c1c;
+  background: #fef2f2;
+  border-top: 1px solid #fecaca;
+}
+
+.ai-composer {
+  border-top: 1px solid #e5e7eb;
+  padding: 12px;
+  background: #fff;
+}
+
+.ai-composer textarea {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  background: #f3f4f6;
+  color: #111827;
+  border-radius: 8px;
+  resize: vertical;
+  padding: 10px;
+  font-size: 14px;
+}
+
+.ai-composer textarea::placeholder {
+  color: #6b7280;
+}
+
+.ai-composer button {
+  margin-top: 8px;
+  border: none;
+  background: #1d4ed8;
+  color: #fff;
+  border-radius: 8px;
+  height: 36px;
+  padding: 0 14px;
+  cursor: pointer;
+}
+
+.ai-composer button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+@media (max-width: 768px) {
+  .ai-float-btn {
+    width: 54px;
+    height: 54px;
+    right: 12px;
+    top: 84px;
+  }
+
+  .ai-chat-window {
+    left: 0;
+    right: 0;
+    top: 64px;
+    bottom: 0;
+    width: 100%;
+  }
 }
 
 /* 登录相关样式 */
