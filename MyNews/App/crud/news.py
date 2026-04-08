@@ -3,6 +3,14 @@ from sqlalchemy import select, func, desc, case, or_
 from sqlalchemy.orm import joinedload
 from models.news import Category,News
 
+
+def _approved_visible_condition():
+    """统一约束：仅返回审核通过且未删除的新闻。"""
+    return [
+        News.audit_status == 'approved',
+        News.is_deleted.is_(False),
+    ]
+
 # 根据id获取新闻
 async def get_news_by_id(db: AsyncSession, news_id: int):
     stmt = select(News).options(joinedload(News.category)).where(News.id == news_id)
@@ -33,22 +41,20 @@ async def get_categories(db: AsyncSession, skip: int = 0, limit: int = 100):
 
 # 获取总新闻条数
 async def get_news_count(db: AsyncSession):
+    """统计可见新闻总数。"""
     stmt = select(func.count(News.id)).where(
-        News.audit_status == 'approved',
-        News.is_deleted.is_(False),
+        *_approved_visible_condition(),
     )
     result = await db.execute(stmt)
     return result.scalar()
 
 # 获取新闻列表 (分页，倒序，关联分类表防止N+1查询)
 async def get_news(db: AsyncSession, skip: int = 0, limit: int = 10):
+    """分页获取可见新闻列表。"""
     stmt = (
         select(News)
         .options(joinedload(News.category))
-        .where(
-            News.audit_status == 'approved',
-            News.is_deleted.is_(False),
-        )
+        .where(*_approved_visible_condition())
         .order_by(desc(News.publish_time))
         .offset(skip)
         .limit(limit)
@@ -58,24 +64,21 @@ async def get_news(db: AsyncSession, skip: int = 0, limit: int = 10):
 
 # 获取某个分类下的新闻总条数
 async def get_news_count_by_category(db: AsyncSession, category_id: int):
+    """统计某分类下可见新闻总数。"""
     stmt = select(func.count(News.id)).where(
         News.category_id == category_id,
-        News.audit_status == 'approved',
-        News.is_deleted.is_(False),
+        *_approved_visible_condition(),
     )
     result = await db.execute(stmt)
     return result.scalar()
 
 # 获取某个分类下的新闻列表 (分页，倒序，关联分类表防止N+1查询)
 async def get_news_by_category(db: AsyncSession, category_id: int, skip: int = 0, limit: int = 10):
+    """分页获取某分类下可见新闻。"""
     stmt = (
         select(News)
         .options(joinedload(News.category))
-        .where(
-            News.category_id == category_id,
-            News.audit_status == 'approved',
-            News.is_deleted.is_(False),
-        )
+        .where(News.category_id == category_id, *_approved_visible_condition())
         .order_by(desc(News.publish_time))
         .offset(skip)
         .limit(limit)
@@ -95,8 +98,7 @@ async def get_hot_news(db: AsyncSession, min_views: int = 0, limit: int = 8, off
         .options(joinedload(News.category))
         .where(
             News.views >= min_views,
-            News.audit_status == 'approved',
-            News.is_deleted.is_(False),
+            *_approved_visible_condition(),
         )
         .order_by(desc(News.views))
         .offset(offset)
@@ -131,17 +133,18 @@ def _build_search_relevance(keyword: str):
 
 
 async def get_search_count(db: AsyncSession, keyword: str):
+    """统计关键词命中的可见新闻数量。"""
     condition = _build_search_condition(keyword)
     stmt = select(func.count(News.id)).where(
         condition,
-        News.audit_status == 'approved',
-        News.is_deleted.is_(False),
+        *_approved_visible_condition(),
     )
     result = await db.execute(stmt)
     return result.scalar()
 
 
 async def search_news(db: AsyncSession, keyword: str, skip: int = 0, limit: int = 10):
+    """按相关度和时间排序搜索可见新闻。"""
     condition = _build_search_condition(keyword)
     relevance = _build_search_relevance(keyword).label("relevance")
     stmt = (
@@ -149,8 +152,7 @@ async def search_news(db: AsyncSession, keyword: str, skip: int = 0, limit: int 
         .options(joinedload(News.category))
         .where(
             condition,
-            News.audit_status == 'approved',
-            News.is_deleted.is_(False),
+            *_approved_visible_condition(),
         )
         .order_by(desc(relevance), desc(News.publish_time), desc(News.views))
         .offset(skip)
@@ -161,6 +163,7 @@ async def search_news(db: AsyncSession, keyword: str, skip: int = 0, limit: int 
 
 
 async def search_news_suggestions(db: AsyncSession, keyword: str, limit: int = 5):
+    """返回搜索联想词（标题匹配）。"""
     if limit <= 0:
         return []
 
@@ -176,8 +179,7 @@ async def search_news_suggestions(db: AsyncSession, keyword: str, limit: int = 5
         select(News.id, News.title, relevance)
         .where(
             condition,
-            News.audit_status == 'approved',
-            News.is_deleted.is_(False),
+            *_approved_visible_condition(),
         )
         .order_by(desc(relevance), desc(News.views), desc(News.publish_time))
         .limit(limit)
@@ -302,13 +304,11 @@ async def get_news_for_author(
 
 
 async def get_news_for_rag(db: AsyncSession):
+    """加载用于 RAG 构建的可见新闻全集。"""
     stmt = (
         select(News)
         .options(joinedload(News.category))
-        .where(
-            News.audit_status == 'approved',
-            News.is_deleted.is_(False),
-        )
+        .where(*_approved_visible_condition())
         .order_by(desc(News.publish_time))
     )
     result = await db.execute(stmt)

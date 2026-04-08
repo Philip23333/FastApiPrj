@@ -13,6 +13,7 @@ from schemas.news import CategoryOut, HotNewsItemOut, NewsAdminItemOut, NewsAdmi
 from services.ai.rag_service import rag_service
 from utils.response import ApiResponse, PaginatedData, paginated_response, success_response
 from config.cache_config import redis_client
+from utils.pagination import normalize_pagination
 
 logger = logging.getLogger(__name__)
 # 热门新闻缓存配置
@@ -82,6 +83,47 @@ router = APIRouter(
     tags=["news"],
 )
 
+
+def _ensure_logged_in(current_user: User | None):
+    """统一登录态校验。"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="用户未登录")
+
+
+def _build_editable_authors(current_user: User) -> set[str]:
+    """构建当前用户可编辑的作者集合（username + nickname）。"""
+    editable_authors = {current_user.username}
+    if current_user.nickname:
+        editable_authors.add(current_user.nickname)
+    return editable_authors
+
+
+async def _delete_cache_by_pattern(pattern: str):
+    """按 key 前缀批量删除缓存，删除失败不抛出异常。"""
+    keys = await redis_client.keys(pattern)
+    if keys:
+        await redis_client.delete(*keys)
+
+
+async def _invalidate_list_and_category_cache(*category_ids: int):
+    """失效新闻列表缓存及指定分类缓存。"""
+    try:
+        await _delete_cache_by_pattern(f"{NEWS_LIST_CACHE_KEY_PREFIX}:*")
+        for cat_id in set(category_ids):
+            await _delete_cache_by_pattern(f"{CATEGORY_NEWS_CACHE_KEY_PREFIX}:{cat_id}:*")
+    except Exception as exc:
+        logger.warning("cache clear failed for categories=%s, error=%s", category_ids, exc)
+
+
+async def _invalidate_all_news_cache():
+    """失效新闻列表、分类列表、分类新闻与热榜缓存。"""
+    try:
+        await _delete_cache_by_pattern(f"{NEWS_LIST_CACHE_KEY_PREFIX}:*")
+        await _delete_cache_by_pattern(f"{CATEGORY_NEWS_CACHE_KEY_PREFIX}:*")
+        await _delete_cache_by_pattern(f"{HOT_CACHE_KEY_PREFIX}:*")
+    except Exception as exc:
+        logger.warning("cache clear failed for all news caches, error=%s", exc)
+
 # 搜索建议接口和搜索结果接口的实现，增加了输入校验和分页参数的安全处理，确保即使前端传入异常值也能正常响应。
 @router.get("/search/suggest", response_model=ApiResponse[list[SearchSuggestionOut]])
 async def get_search_suggestions(q: str, limit: int = 5, db: AsyncSession = Depends(get_db)):
@@ -103,13 +145,12 @@ async def get_search_suggestions(q: str, limit: int = 5, db: AsyncSession = Depe
 
 @router.get("/search", response_model=ApiResponse[PaginatedData[SearchNewsItemOut]])
 async def search_news(q: str, page: int = 1, size: int = 10, db: AsyncSession = Depends(get_db)):
+    """全文搜索新闻并返回带相关度的分页结果。"""
     keyword = q.strip()
     if not keyword:
         return paginated_response([], total=0, page=page, size=size, message="search results")
 
-    safe_page = max(page, 1)
-    safe_size = max(1, min(size, 50))
-    skip = (safe_page - 1) * safe_size
+    safe_page, safe_size, skip = normalize_pagination(page, size, max_size=50)
     total = await news_crud.get_search_count(db, keyword=keyword)
     rows = await news_crud.search_news(db, keyword=keyword, skip=skip, limit=safe_size)
 
@@ -137,8 +178,8 @@ async def create_news(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if not current_user:
-        raise HTTPException(status_code=401, detail="用户未登录")
+    """创建新闻，默认作者为当前登录用户。"""
+    _ensure_logged_in(current_user)
 
     category = await news_crud.get_category_by_id(db, news_in.category_id)
     if not category:
@@ -158,17 +199,8 @@ async def create_news(
         await db.rollback()
         raise
 
-    # 发布后失效受影响缓存，保证列表和分类页可见新数据
-    try:
-        list_keys = await redis_client.keys(f"{NEWS_LIST_CACHE_KEY_PREFIX}:*")
-        if list_keys:
-            await redis_client.delete(*list_keys)
-
-        category_keys = await redis_client.keys(f"{CATEGORY_NEWS_CACHE_KEY_PREFIX}:{created.category_id}:*")
-        if category_keys:
-            await redis_client.delete(*category_keys)
-    except Exception as exc:
-        logger.warning("cache clear failed after create news id=%s, error=%s", created.id, exc)
+    # 发布后失效受影响缓存，保证列表和分类页可见新数据。
+    await _invalidate_list_and_category_cache(created.category_id)
 
     payload = NewsDetailOut(
         id=created.id,
@@ -192,16 +224,14 @@ async def update_news(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if not current_user:
-        raise HTTPException(status_code=401, detail="用户未登录")
+    """更新新闻内容，更新后重新进入待审核状态。"""
+    _ensure_logged_in(current_user)
 
     db_news = await news_crud.get_news_by_id_plain(db, news_id)
     if not db_news:
         raise HTTPException(status_code=404, detail="新闻不存在")
 
-    editable_authors = {current_user.username}
-    if current_user.nickname:
-        editable_authors.add(current_user.nickname)
+    editable_authors = _build_editable_authors(current_user)
     if db_news.author not in editable_authors:
         raise HTTPException(status_code=403, detail="无权限编辑该新闻")
 
@@ -225,18 +255,7 @@ async def update_news(
         await db.rollback()
         raise
 
-    try:
-        list_keys = await redis_client.keys(f"{NEWS_LIST_CACHE_KEY_PREFIX}:*")
-        if list_keys:
-            await redis_client.delete(*list_keys)
-
-        affected_categories = {old_category_id, updated.category_id}
-        for cat_id in affected_categories:
-            category_keys = await redis_client.keys(f"{CATEGORY_NEWS_CACHE_KEY_PREFIX}:{cat_id}:*")
-            if category_keys:
-                await redis_client.delete(*category_keys)
-    except Exception as exc:
-        logger.warning("cache clear failed after update news id=%s, error=%s", updated.id, exc)
+    await _invalidate_list_and_category_cache(old_category_id, updated.category_id)
 
     # 作者编辑后会重新进入 pending，向量库需移除旧片段。
     try:
@@ -271,12 +290,10 @@ async def get_my_news(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if not current_user:
-        raise HTTPException(status_code=401, detail="用户未登录")
+    """分页读取当前用户发布的新闻。"""
+    _ensure_logged_in(current_user)
 
-    safe_page = max(1, page)
-    safe_size = max(1, min(size, 100))
-    skip = (safe_page - 1) * safe_size
+    safe_page, safe_size, skip = normalize_pagination(page, size, max_size=100)
 
     authors = [current_user.username]
     if current_user.nickname:
@@ -315,16 +332,14 @@ async def delete_news(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if not current_user:
-        raise HTTPException(status_code=401, detail="用户未登录")
+    """删除新闻并同步移除向量索引。"""
+    _ensure_logged_in(current_user)
 
     db_news = await news_crud.get_news_by_id_plain(db, news_id)
     if not db_news:
         raise HTTPException(status_code=404, detail="新闻不存在")
 
-    editable_authors = {current_user.username}
-    if current_user.nickname:
-        editable_authors.add(current_user.nickname)
+    editable_authors = _build_editable_authors(current_user)
     if db_news.author not in editable_authors:
         raise HTTPException(status_code=403, detail="无权限删除该新闻")
 
@@ -336,16 +351,7 @@ async def delete_news(
         await db.rollback()
         raise
 
-    try:
-        list_keys = await redis_client.keys(f"{NEWS_LIST_CACHE_KEY_PREFIX}:*")
-        if list_keys:
-            await redis_client.delete(*list_keys)
-
-        category_keys = await redis_client.keys(f"{CATEGORY_NEWS_CACHE_KEY_PREFIX}:{category_id}:*")
-        if category_keys:
-            await redis_client.delete(*category_keys)
-    except Exception as exc:
-        logger.warning("cache clear failed after delete news id=%s, error=%s", news_id, exc)
+    await _invalidate_list_and_category_cache(category_id)
 
     # 删除新闻后同步删除向量索引中的历史片段。
     try:
@@ -362,16 +368,14 @@ async def get_editable_news_detail(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if not current_user:
-        raise HTTPException(status_code=401, detail="用户未登录")
+    """读取当前用户可编辑的新闻详情。"""
+    _ensure_logged_in(current_user)
 
     db_news = await news_crud.get_news_by_id_plain(db, news_id)
     if not db_news or db_news.is_deleted:
         raise HTTPException(status_code=404, detail="新闻不存在")
 
-    editable_authors = {current_user.username}
-    if current_user.nickname:
-        editable_authors.add(current_user.nickname)
+    editable_authors = _build_editable_authors(current_user)
     if db_news.author not in editable_authors:
         raise HTTPException(status_code=403, detail="无权限编辑该新闻")
 
@@ -403,11 +407,10 @@ async def admin_get_news_list(
     db: AsyncSession = Depends(get_db),
     current_admin_user: User = Depends(get_current_reviewer_or_admin_user),
 ):
+    """管理员/审核员分页查询新闻列表。"""
     _ = current_admin_user
 
-    safe_page = max(1, page)
-    safe_size = max(1, min(size, 100))
-    skip = (safe_page - 1) * safe_size
+    safe_page, safe_size, skip = normalize_pagination(page, size, max_size=100)
 
     allowed_audit_status = {"pending", "approved", "rejected", "draft"}
     if audit_status and audit_status not in allowed_audit_status:
@@ -445,6 +448,7 @@ async def admin_moderate_news(
     db: AsyncSession = Depends(get_db),
     current_admin_user: User = Depends(get_current_reviewer_or_admin_user),
 ):
+    """管理员/审核员更新新闻审核状态与分类。"""
     db_news = await news_crud.get_news_by_id_plain(db, news_id)
     if not db_news or db_news.is_deleted:
         raise HTTPException(status_code=404, detail="新闻不存在")
@@ -482,17 +486,7 @@ async def admin_moderate_news(
         raise
 
     # 管理操作后清理缓存，保证前台列表与分类页感知到变更。
-    try:
-        list_keys = await redis_client.keys(f"{NEWS_LIST_CACHE_KEY_PREFIX}:*")
-        if list_keys:
-            await redis_client.delete(*list_keys)
-
-        for cat_id in {old_category_id, updated.category_id}:
-            category_keys = await redis_client.keys(f"{CATEGORY_NEWS_CACHE_KEY_PREFIX}:{cat_id}:*")
-            if category_keys:
-                await redis_client.delete(*category_keys)
-    except Exception as exc:
-        logger.warning("cache clear failed after admin moderate news id=%s, error=%s", updated.id, exc)
+    await _invalidate_list_and_category_cache(old_category_id, updated.category_id)
 
     # 审核或分类变更后执行增量同步：approved 时 upsert，其它状态时删除索引。
     if payload.audit_status is not None or payload.category_id is not None:
@@ -526,9 +520,8 @@ async def admin_moderate_news(
 # 现在返回值必须指定为 ApiResponse[具体类型]，以便前端能正确解析 data 字段里的内容。
 @router.get("/", response_model=ApiResponse[PaginatedData[NewsListItemOut]])
 async def get_news(page: int = 1, size: int = 10, db: AsyncSession = Depends(get_db)):
-    safe_page = max(1, page)
-    safe_size = max(1, min(size, 50))
-    skip = (safe_page - 1) * safe_size
+    """分页获取新闻列表（Cache-Aside）。"""
+    safe_page, safe_size, skip = normalize_pagination(page, size, max_size=50)
 
     # Cache-Aside：先查缓存，命中直接返回，未命中再查数据库。
     cache_key = build_news_list_cache_key(safe_page, safe_size)
@@ -579,10 +572,9 @@ async def get_hot_news(
     size: int = 8,          # 此批次条数
     db: AsyncSession = Depends(get_db)
 ):
-    safe_page = max(1, page)
-    safe_size = max(1, min(size, 50))
+    """分页获取热榜新闻（支持换一换）。"""
+    safe_page, safe_size, skip = normalize_pagination(page, size, max_size=50)
     safe_min_views = max(0, min_views)
-    skip = (safe_page - 1) * safe_size
 
     redis_available = True
 
@@ -647,10 +639,10 @@ async def get_news_by_id(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
     ):
+    """读取新闻详情并增加浏览量。"""
 
 # 先增加权限校验，确保只有登录用户才能访问新闻详情接口。之后再查询新闻详情并返回。
-    if not current_user:
-        raise HTTPException(status_code=401, detail="用户未登录")
+    _ensure_logged_in(current_user)
 
     news = await news_crud.get_news_by_id(db, news_id=news_id)
     if not news:
@@ -660,20 +652,7 @@ async def get_news_by_id(
     await db.commit()
 
     # 详情访问会增加浏览量，主动失效列表/分类/热榜缓存，减少前台浏览量展示滞后。
-    try:
-        list_keys = await redis_client.keys(f"{NEWS_LIST_CACHE_KEY_PREFIX}:*")
-        if list_keys:
-            await redis_client.delete(*list_keys)
-
-        category_keys = await redis_client.keys(f"{CATEGORY_NEWS_CACHE_KEY_PREFIX}:*")
-        if category_keys:
-            await redis_client.delete(*category_keys)
-
-        hot_keys = await redis_client.keys(f"{HOT_CACHE_KEY_PREFIX}:*")
-        if hot_keys:
-            await redis_client.delete(*hot_keys)
-    except Exception as exc:
-        logger.warning("cache clear failed after news view increment id=%s, error=%s", news.id, exc)
+    await _invalidate_all_news_cache()
         
     news_data = NewsDetailOut(
         id=news.id,
@@ -693,6 +672,7 @@ async def get_news_by_id(
 # TODO: Implement "get_categories" endpoint here
 @router.get("/categories", response_model=ApiResponse[list[CategoryOut]])
 async def get_categories(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
+    """获取新闻分类列表（低频缓存）。"""
     safe_skip = max(0, skip)
     safe_limit = max(1, min(limit, 100))
 
@@ -714,9 +694,8 @@ async def get_categories(skip: int = 0, limit: int = 100, db: AsyncSession = Dep
 # TODO: Implement "get_news_by_categories" endpoint here
 @router.get("/categories/{category_id}/news", response_model=ApiResponse[PaginatedData[NewsListItemOut]])
 async def get_news_by_categories(category_id: int, page: int = 1, size: int = 10, db: AsyncSession = Depends(get_db)):
-    safe_page = max(1, page)
-    safe_size = max(1, min(size, 50))
-    skip = (safe_page - 1) * safe_size
+    """按分类分页获取新闻列表（Cache-Aside）。"""
+    safe_page, safe_size, skip = normalize_pagination(page, size, max_size=50)
 
     # 这是分类维度分页查询，参数组合固定后非常适合做 key 缓存。
     cache_key = build_category_news_cache_key(category_id, safe_page, safe_size)

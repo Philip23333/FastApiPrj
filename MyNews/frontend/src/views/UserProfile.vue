@@ -49,7 +49,13 @@ const avatarText = computed(() => (displayName.value || '头').slice(0, 1).toUpp
 const profileBio = computed(() => profile.value.bio || '这个人很低调，还没有写简介。')
 const canAccessBackOffice = computed(() => ['admin', 'reviewer'].includes(currentUser.value?.role))
 
+// 统一提取后端错误文案，避免每个请求重复拼接。
+const getApiErrorMessage = (error, fallback) => {
+  return error?.response?.data?.message || error?.response?.data?.detail || fallback
+}
+
 const goToAdminUserManage = () => {
+  // 管理员/审核员快速进入后台管理页。
   if (!canAccessBackOffice.value) return
   router.push('/admin/users')
 }
@@ -64,6 +70,7 @@ const editForm = ref({
 })
 
 const openEditModal = () => {
+  // 打开编辑弹窗时，回填当前资料。
   editForm.value = { 
     nickname: profile.value.nickname || '',
     bio: profile.value.bio || '',
@@ -73,6 +80,7 @@ const openEditModal = () => {
 }
 
 const saveProfile = async () => {
+  // 保存资料，密码为空时保持不修改。
   if (!currentUser.value?.id) return
   savingProfile.value = true
   try {
@@ -100,16 +108,19 @@ const saveProfile = async () => {
 }
 
 const handlePublishClickFromNav = () => {
+  // 顶栏发布入口：未登录则跳回首页进行登录。
   handlePublishClick({ openLoginModal: () => router.push('/') })
 }
 
 const goToNewsDetail = (id) => {
+  // 跳转新闻详情页。
   router.push(`/news/${id}`)
 }
 
 const isHistoryUnavailable = (item) => Boolean(item?.is_removed)
 
 const goToEditNews = (id) => {
+  // 进入发布页编辑模式。
   router.push(`/publish?edit=${id}`)
 }
 
@@ -122,6 +133,7 @@ const auditStatusText = (status) => {
 }
 
 const showToast = (message) => {
+  // 轻提示统一入口，自动消失。
   toastMessage.value = message
   toastVisible.value = true
   if (toastTimer) {
@@ -150,6 +162,7 @@ const editWork = (newsId) => {
 }
 
 const deleteWork = async (newsId) => {
+  // 删除用户作品，并同步更新本地列表。
   if (deletingNewsId.value) return
   if (!window.confirm('确定要删除这篇新闻吗？删除后不可恢复。')) {
     return
@@ -167,7 +180,7 @@ const deleteWork = async (newsId) => {
     alert(res.data?.message || '删除失败，请稍后重试。')
   } catch (error) {
     console.error(error)
-    alert(error?.response?.data?.message || error?.response?.data?.detail || '删除失败，请稍后重试。')
+    alert(getApiErrorMessage(error, '删除失败，请稍后重试。'))
   } finally {
     deletingNewsId.value = null
   }
@@ -198,6 +211,7 @@ const normalizeImageUrl = (url) => {
 }
 
 const fetchProfile = async () => {
+  // 拉取用户基础资料。
   if (!currentUser.value?.id) return
 
   try {
@@ -218,6 +232,7 @@ const fetchProfile = async () => {
 }
 
 const fetchWorks = async () => {
+  // 拉取用户作品列表。
   try {
     loadingWorks.value = true
     const res = await axios.get(withApiBase('/news/mine?page=1&size=100'))
@@ -233,6 +248,7 @@ const fetchWorks = async () => {
 }
 
 const fetchFavorites = async () => {
+  // 拉取收藏列表并补齐新闻详情。
   if (!currentUser.value?.id) return
 
   loadingFavorites.value = true
@@ -276,6 +292,7 @@ const fetchFavorites = async () => {
 }
 
 const fetchHistories = async () => {
+  // 拉取浏览记录并转换为卡片展示结构。
   if (!currentUser.value?.id) return
 
   loadingHistories.value = true
@@ -312,26 +329,50 @@ const fetchHistories = async () => {
   }
 }
 
+const switchSelectMode = ({
+  enableRef,
+  selfSelectedRef,
+  otherEnableRef,
+  otherSelectedRef,
+}) => {
+  // 统一切换“勾选模式”：开启当前模式时关闭另一个模式。
+  enableRef.value = !enableRef.value
+  if (enableRef.value) {
+    otherEnableRef.value = false
+    otherSelectedRef.value = []
+  } else {
+    selfSelectedRef.value = []
+  }
+}
+
 const toggleFavoriteSelectMode = () => {
-  favoriteSelectMode.value = !favoriteSelectMode.value
-  if (favoriteSelectMode.value) {
-    historySelectMode.value = false
-    selectedHistoryNewsIds.value = []
-  }
-  if (!favoriteSelectMode.value) {
-    selectedFavoriteNewsIds.value = []
-  }
+  switchSelectMode({
+    enableRef: favoriteSelectMode,
+    selfSelectedRef: selectedFavoriteNewsIds,
+    otherEnableRef: historySelectMode,
+    otherSelectedRef: selectedHistoryNewsIds,
+  })
 }
 
 const isFavoriteSelected = (newsId) => selectedFavoriteNewsIds.value.includes(newsId)
 
-const toggleFavoriteSelection = (newsId) => {
-  if (!favoriteSelectMode.value) return
-  if (isFavoriteSelected(newsId)) {
-    selectedFavoriteNewsIds.value = selectedFavoriteNewsIds.value.filter((id) => id !== newsId)
+const toggleSelection = ({ modeRef, selectedRef, itemId, selectedChecker }) => {
+  // 统一勾选/取消勾选逻辑。
+  if (!modeRef.value) return
+  if (selectedChecker(itemId)) {
+    selectedRef.value = selectedRef.value.filter((id) => id !== itemId)
     return
   }
-  selectedFavoriteNewsIds.value.push(newsId)
+  selectedRef.value.push(itemId)
+}
+
+const toggleFavoriteSelection = (newsId) => {
+  toggleSelection({
+    modeRef: favoriteSelectMode,
+    selectedRef: selectedFavoriteNewsIds,
+    itemId: newsId,
+    selectedChecker: isFavoriteSelected,
+  })
 }
 
 const handleFavoriteCardClick = (newsId) => {
@@ -351,25 +392,23 @@ const clearFavoriteSelection = () => {
 }
 
 const toggleHistorySelectMode = () => {
-  historySelectMode.value = !historySelectMode.value
-  if (historySelectMode.value) {
-    favoriteSelectMode.value = false
-    selectedFavoriteNewsIds.value = []
-  }
-  if (!historySelectMode.value) {
-    selectedHistoryNewsIds.value = []
-  }
+  switchSelectMode({
+    enableRef: historySelectMode,
+    selfSelectedRef: selectedHistoryNewsIds,
+    otherEnableRef: favoriteSelectMode,
+    otherSelectedRef: selectedFavoriteNewsIds,
+  })
 }
 
 const isHistorySelected = (newsId) => selectedHistoryNewsIds.value.includes(newsId)
 
 const toggleHistorySelection = (newsId) => {
-  if (!historySelectMode.value) return
-  if (isHistorySelected(newsId)) {
-    selectedHistoryNewsIds.value = selectedHistoryNewsIds.value.filter((id) => id !== newsId)
-    return
-  }
-  selectedHistoryNewsIds.value.push(newsId)
+  toggleSelection({
+    modeRef: historySelectMode,
+    selectedRef: selectedHistoryNewsIds,
+    itemId: newsId,
+    selectedChecker: isHistorySelected,
+  })
 }
 
 const handleHistoryCardClick = (item) => {
@@ -392,72 +431,85 @@ const clearHistorySelection = () => {
   selectedHistoryNewsIds.value = []
 }
 
+const runBatchDelete = async ({
+  selectedIdsRef,
+  endpointBuilder,
+  confirmMessage,
+  onSuccess,
+  partialFailMessageBuilder,
+  fallbackError,
+}) => {
+  // 通用批量删除执行器，返回成功条目并处理部分失败提示。
+  const targets = [...selectedIdsRef.value]
+  if (targets.length === 0) {
+    return false
+  }
+
+  if (!window.confirm(confirmMessage(targets.length))) {
+    return false
+  }
+
+  try {
+    const tasks = targets.map((id) => axios.delete(withApiBase(endpointBuilder(id))))
+    const results = await Promise.allSettled(tasks)
+
+    const successIds = results
+      .map((result, idx) => (result.status === 'fulfilled' && result.value?.data?.code === 200 ? targets[idx] : null))
+      .filter(Boolean)
+
+    if (successIds.length > 0) {
+      onSuccess(successIds)
+    }
+
+    if (successIds.length !== targets.length) {
+      alert(partialFailMessageBuilder(successIds.length, targets.length - successIds.length))
+    }
+    return true
+  } catch (error) {
+    console.error(error)
+    alert(fallbackError)
+    return false
+  }
+}
+
 const batchRemoveHistories = async () => {
+  // 批量删除浏览记录。
   if (selectedHistoryNewsIds.value.length === 0) {
     alert('请先勾选要删除的浏览记录。')
     return
   }
 
-  const confirmText = `确定要删除已勾选的 ${selectedHistoryNewsIds.value.length} 条浏览记录吗？`
-  if (!window.confirm(confirmText)) {
-    return
-  }
-
-  try {
-    const targets = [...selectedHistoryNewsIds.value]
-    const tasks = targets.map((newsId) => axios.delete(withApiBase(`/history/${newsId}`)))
-    const results = await Promise.allSettled(tasks)
-
-    const successIds = results
-      .map((result, idx) => (result.status === 'fulfilled' && result.value?.data?.code === 200 ? targets[idx] : null))
-      .filter(Boolean)
-
-    if (successIds.length > 0) {
+  await runBatchDelete({
+    selectedIdsRef: selectedHistoryNewsIds,
+    endpointBuilder: (newsId) => `/history/${newsId}`,
+    confirmMessage: (count) => `确定要删除已勾选的 ${count} 条浏览记录吗？`,
+    onSuccess: (successIds) => {
       histories.value = histories.value.filter((item) => !successIds.includes(item.id))
       selectedHistoryNewsIds.value = selectedHistoryNewsIds.value.filter((id) => !successIds.includes(id))
-    }
-
-    if (successIds.length !== targets.length) {
-      alert(`已删除浏览记录 ${successIds.length} 条，${targets.length - successIds.length} 条操作失败。`)
-    }
-  } catch (error) {
-    console.error(error)
-    alert('批量删除浏览记录失败，请稍后重试。')
-  }
+    },
+    partialFailMessageBuilder: (success, failed) => `已删除浏览记录 ${success} 条，${failed} 条操作失败。`,
+    fallbackError: '批量删除浏览记录失败，请稍后重试。',
+  })
 }
 
 const batchRemoveFavorites = async () => {
+  // 批量取消收藏。
   if (selectedFavoriteNewsIds.value.length === 0) {
     alert('请先勾选要取消收藏的内容。')
     return
   }
 
-  const confirmText = `确定要取消收藏已勾选的 ${selectedFavoriteNewsIds.value.length} 条内容吗？`
-  if (!window.confirm(confirmText)) {
-    return
-  }
-
-  try {
-    const targets = [...selectedFavoriteNewsIds.value]
-    const tasks = targets.map((newsId) => axios.delete(withApiBase(`/favorites/${newsId}`)))
-    const results = await Promise.allSettled(tasks)
-
-    const successIds = results
-      .map((result, idx) => (result.status === 'fulfilled' && result.value?.data?.code === 200 ? targets[idx] : null))
-      .filter(Boolean)
-
-    if (successIds.length > 0) {
+  await runBatchDelete({
+    selectedIdsRef: selectedFavoriteNewsIds,
+    endpointBuilder: (newsId) => `/favorites/${newsId}`,
+    confirmMessage: (count) => `确定要取消收藏已勾选的 ${count} 条内容吗？`,
+    onSuccess: (successIds) => {
       favorites.value = favorites.value.filter((item) => !successIds.includes(item.id))
       selectedFavoriteNewsIds.value = selectedFavoriteNewsIds.value.filter((id) => !successIds.includes(id))
-    }
-
-    if (successIds.length !== targets.length) {
-      alert(`已取消收藏 ${successIds.length} 条，${targets.length - successIds.length} 条操作失败。`)
-    }
-  } catch (error) {
-    console.error(error)
-    alert('批量取消收藏失败，请稍后重试。')
-  }
+    },
+    partialFailMessageBuilder: (success, failed) => `已取消收藏 ${success} 条，${failed} 条操作失败。`,
+    fallbackError: '批量取消收藏失败，请稍后重试。',
+  })
 }
 
 onMounted(async () => {

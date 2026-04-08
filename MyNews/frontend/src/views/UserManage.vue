@@ -122,8 +122,13 @@ const roleOptions = [
   { label: '审核员', value: 'reviewer' },
 ]
 
+// 统一提取错误消息，避免每个请求重复写兜底分支。
+const getApiErrorMessage = (error, fallback) => {
+  return error?.response?.data?.message || error?.response?.data?.detail || fallback
+}
+
 const showError = (error, fallback = '请求失败，请稍后重试。') => {
-  message.value = error?.response?.data?.message || error?.response?.data?.detail || fallback
+  message.value = getApiErrorMessage(error, fallback)
 }
 
 const showSuccessToast = (text, type = 'success') => {
@@ -141,6 +146,7 @@ const showSuccessToast = (text, type = 'success') => {
 }
 
 const loadAuditRecordCache = () => {
+  // 本地缓存最近几条审核记录，减少抽屉反复打开时的空态抖动。
   try {
     const raw = localStorage.getItem(AUDIT_RECORD_CACHE_KEY)
     auditRecordCache.value = raw ? JSON.parse(raw) : {}
@@ -161,6 +167,7 @@ const normalizeAuditRecord = (record) => ({
 })
 
 const mergeAuditRecordsForNews = (newsId, records = []) => {
+  // 合并并去重审核记录，只保留最近3条关键信息。
   const uniqueMap = new Map()
   records.forEach((record) => {
     const normalized = normalizeAuditRecord(record)
@@ -209,6 +216,7 @@ const formatDateTime = (value) => {
 }
 
 const openNewsDetailDrawer = async (item) => {
+  // 打开右侧详情抽屉，并异步拉取完整正文。
   detailVisible.value = true
   detailError.value = ''
   detailSummary.value = item
@@ -223,7 +231,7 @@ const openNewsDetailDrawer = async (item) => {
     }
     detailError.value = res.data?.message || '拉取新闻详情失败。'
   } catch (error) {
-    detailError.value = error?.response?.data?.message || error?.response?.data?.detail || '拉取新闻详情失败。'
+    detailError.value = getApiErrorMessage(error, '拉取新闻详情失败。')
   } finally {
     loadingDetail.value = false
   }
@@ -308,6 +316,7 @@ const prevUserPage = () => {
 }
 
 const fillUserTailPageIfNeeded = async () => {
+  // 当前页不足一屏且后端仍有数据时，自动补拉下一批。
   const isTailPage = userPage.value === totalUserPages.value
   const currentCount = pagedUsers.value.length
   if (isTailPage && currentCount > 0 && currentCount < userPageSize.value && userHasMore.value) {
@@ -328,6 +337,7 @@ const nextUserPage = async () => {
 }
 
 const fillNewsTailPageIfNeeded = async (pane = newsPane.value) => {
+  // 新闻分页同样采用“尾页补拉”策略，提升翻页连续性。
   const list = pane === 'pending' ? pendingNewsList.value : reviewedNewsList.value
   const page = pane === 'pending' ? pendingNewsPage.value : reviewedNewsPage.value
   const hasMore = pane === 'pending' ? pendingNewsHasMore.value : reviewedHasMore.value
@@ -421,6 +431,7 @@ const sortReviewedNews = (list) => {
 }
 
 const fetchUsers = async ({ reset = false } = {}) => {
+  // 用户管理列表采用前端缓冲分页，减少频繁请求。
   if (!reset && (!userHasMore.value || loadingUsers.value)) {
     return
   }
@@ -462,6 +473,7 @@ const fetchCategories = async () => {
 }
 
 const fetchNewsByStatus = async (status, page = 1) => {
+  // 后端按审核状态分页查询，前端再做缓冲与合并。
   const res = await axios.get(withApiBase(`/news/admin/list?page=${page}&size=${BACKEND_BUFFER_SIZE}&audit_status=${status}`))
   if (res.data?.code === 200) {
     return {
@@ -476,6 +488,7 @@ const fetchNewsByStatus = async (status, page = 1) => {
 }
 
 const fetchPendingNewsBuffer = async ({ reset = false } = {}) => {
+  // 补拉待审核列表缓冲区。
   if (!reset && !pendingNewsHasMore.value) {
     return
   }
@@ -491,6 +504,7 @@ const fetchPendingNewsBuffer = async ({ reset = false } = {}) => {
 }
 
 const fetchReviewedNewsBuffer = async ({ reset = false } = {}) => {
+  // 审核完成区由“通过+拒绝”两路合并后排序展示。
   const shouldFetchApproved = reset || approvedNewsHasMore.value
   const shouldFetchRejected = reset || rejectedNewsHasMore.value
   if (!shouldFetchApproved && !shouldFetchRejected) {
@@ -528,24 +542,29 @@ const fetchReviewedNewsBuffer = async ({ reset = false } = {}) => {
   }
 }
 
+const resetNewsBuffers = () => {
+  // 重置新闻缓冲态，便于重新加载完整管理视图。
+  pendingNewsList.value = []
+  reviewedNewsList.value = []
+  pendingNewsBackendPage.value = 0
+  approvedNewsBackendPage.value = 0
+  rejectedNewsBackendPage.value = 0
+  pendingNewsHasMore.value = true
+  approvedNewsHasMore.value = true
+  rejectedNewsHasMore.value = true
+  pendingNewsTotal.value = 0
+  approvedNewsTotal.value = 0
+  rejectedNewsTotal.value = 0
+  pendingNewsPage.value = 1
+  reviewedNewsPage.value = 1
+}
+
 const fetchNews = async ({ reset = false } = {}) => {
   loadingNews.value = true
   message.value = ''
   try {
     if (reset) {
-      pendingNewsList.value = []
-      reviewedNewsList.value = []
-      pendingNewsBackendPage.value = 0
-      approvedNewsBackendPage.value = 0
-      rejectedNewsBackendPage.value = 0
-      pendingNewsHasMore.value = true
-      approvedNewsHasMore.value = true
-      rejectedNewsHasMore.value = true
-      pendingNewsTotal.value = 0
-      approvedNewsTotal.value = 0
-      rejectedNewsTotal.value = 0
-      pendingNewsPage.value = 1
-      reviewedNewsPage.value = 1
+      resetNewsBuffers()
     }
 
     await Promise.all([
@@ -585,6 +604,7 @@ const refreshCurrentPane = async () => {
 }
 
 const fetchRagStatus = async () => {
+  // 拉取向量索引总体状态。
   ragMessage.value = ''
   try {
     const res = await axios.get(withApiBase('/ai/rag/index/status'))
@@ -594,11 +614,12 @@ const fetchRagStatus = async () => {
     }
     ragMessage.value = res.data?.message || '拉取向量库状态失败。'
   } catch (error) {
-    ragMessage.value = error?.response?.data?.message || error?.response?.data?.detail || '拉取向量库状态失败。'
+    ragMessage.value = getApiErrorMessage(error, '拉取向量库状态失败。')
   }
 }
 
 const fetchRagChunks = async () => {
+  // 拉取向量切片分页列表，支持按新闻ID过滤。
   ragLoading.value = true
   ragMessage.value = ''
   try {
@@ -621,48 +642,62 @@ const fetchRagChunks = async () => {
     }
     ragMessage.value = res.data?.message || '拉取向量切片失败。'
   } catch (error) {
-    ragMessage.value = error?.response?.data?.message || error?.response?.data?.detail || '拉取向量切片失败。'
+    ragMessage.value = getApiErrorMessage(error, '拉取向量切片失败。')
   } finally {
     ragLoading.value = false
   }
 }
 
-const rebuildRagIndex = async () => {
+const runRagAction = async ({
+  request,
+  successMessage,
+  successType = 'success',
+  fallbackError,
+  onSuccess,
+}) => {
+  // 统一向量库动作（重建/清空）的提交流程。
   ragActionLoading.value = true
   ragMessage.value = ''
   try {
-    const res = await axios.post(withApiBase('/ai/rag/index/rebuild'))
+    const res = await request()
     if (res.data?.code === 200) {
-      showSuccessToast('向量索引重建完成')
-      await Promise.all([fetchRagStatus(), fetchRagChunks()])
+      showSuccessToast(successMessage, successType)
+      if (onSuccess) {
+        await onSuccess()
+      }
       return
     }
-    ragMessage.value = res.data?.message || '重建向量索引失败。'
+    ragMessage.value = res.data?.message || fallbackError
   } catch (error) {
-    ragMessage.value = error?.response?.data?.message || error?.response?.data?.detail || '重建向量索引失败。'
+    ragMessage.value = getApiErrorMessage(error, fallbackError)
   } finally {
     ragActionLoading.value = false
   }
 }
 
+const rebuildRagIndex = async () => {
+  await runRagAction({
+    request: () => axios.post(withApiBase('/ai/rag/index/rebuild')),
+    successMessage: '向量索引重建完成',
+    fallbackError: '重建向量索引失败。',
+    onSuccess: async () => {
+      await Promise.all([fetchRagStatus(), fetchRagChunks()])
+    },
+  })
+}
+
 const clearRagIndex = async () => {
-  ragActionLoading.value = true
-  ragMessage.value = ''
-  try {
-    const res = await axios.delete(withApiBase('/ai/rag/index'))
-    if (res.data?.code === 200) {
-      showSuccessToast('向量索引已清空', 'danger')
+  await runRagAction({
+    request: () => axios.delete(withApiBase('/ai/rag/index')),
+    successMessage: '向量索引已清空',
+    successType: 'danger',
+    fallbackError: '清空向量索引失败。',
+    onSuccess: async () => {
       ragChunks.value = []
       ragTotal.value = 0
       await fetchRagStatus()
-      return
-    }
-    ragMessage.value = res.data?.message || '清空向量索引失败。'
-  } catch (error) {
-    ragMessage.value = error?.response?.data?.message || error?.response?.data?.detail || '清空向量索引失败。'
-  } finally {
-    ragActionLoading.value = false
-  }
+    },
+  })
 }
 
 const applyRagFilter = async () => {
@@ -726,6 +761,7 @@ const toggleUserStatus = async (target) => {
 }
 
 const buildModerationPayload = (item, extra = {}) => {
+  // 审核请求共享 payload 构造：以草稿分类为准，并叠加额外字段。
   const draftCategoryId = Number(newsCategoryDraft.value[item.id] || item.category_id)
   const payload = {
     category_id: Number.isNaN(draftCategoryId) ? item.category_id : draftCategoryId,
@@ -734,42 +770,54 @@ const buildModerationPayload = (item, extra = {}) => {
   return payload
 }
 
-const updateNewsCategory = async (item) => {
+const runModerationAction = async ({
+  item,
+  payloadExtra,
+  successText,
+  fallbackError,
+  successType = 'success',
+  resetAfterSuccess = false,
+}) => {
+  // 统一新闻审核动作：改分类/通过/拒绝共用此流程。
   submitting.value = true
   message.value = ''
   try {
-    const payload = buildModerationPayload(item)
+    const payload = buildModerationPayload(item, payloadExtra)
     const res = await axios.patch(withApiBase(`/news/admin/${item.id}/moderation`), payload)
     if (res.data?.code === 200) {
-      showSuccessToast(`已更新《${item.title}》分类`)
-      await fetchNews()
+      showSuccessToast(successText, successType)
+      if (resetAfterSuccess) {
+        await fetchNews({ reset: true })
+      } else {
+        await fetchNews()
+      }
       return
     }
-    message.value = res.data?.message || '分类更新失败。'
+    message.value = res.data?.message || fallbackError
   } catch (error) {
-    showError(error, '分类更新失败。')
+    showError(error, fallbackError)
   } finally {
     submitting.value = false
   }
 }
 
+const updateNewsCategory = async (item) => {
+  await runModerationAction({
+    item,
+    payloadExtra: {},
+    successText: `已更新《${item.title}》分类`,
+    fallbackError: '分类更新失败。',
+  })
+}
+
 const approveNews = async (item) => {
-  submitting.value = true
-  message.value = ''
-  try {
-    const payload = buildModerationPayload(item, { audit_status: 'approved' })
-    const res = await axios.patch(withApiBase(`/news/admin/${item.id}/moderation`), payload)
-    if (res.data?.code === 200) {
-      showSuccessToast(`已通过《${item.title}》审核`)
-      await fetchNews({ reset: true })
-      return
-    }
-    message.value = res.data?.message || '审核通过失败。'
-  } catch (error) {
-    showError(error, '审核通过失败。')
-  } finally {
-    submitting.value = false
-  }
+  await runModerationAction({
+    item,
+    payloadExtra: { audit_status: 'approved' },
+    successText: `已通过《${item.title}》审核`,
+    fallbackError: '审核通过失败。',
+    resetAfterSuccess: true,
+  })
 }
 
 const rejectNews = async (item) => {
@@ -779,25 +827,17 @@ const rejectNews = async (item) => {
     return
   }
 
-  submitting.value = true
-  message.value = ''
-  try {
-    const payload = buildModerationPayload(item, {
+  await runModerationAction({
+    item,
+    payloadExtra: {
       audit_status: 'rejected',
       audit_remark: reason,
-    })
-    const res = await axios.patch(withApiBase(`/news/admin/${item.id}/moderation`), payload)
-    if (res.data?.code === 200) {
-      showSuccessToast(`已拒绝《${item.title}》并记录原因`, 'danger')
-      await fetchNews({ reset: true })
-      return
-    }
-    message.value = res.data?.message || '拒绝审核失败。'
-  } catch (error) {
-    showError(error, '拒绝审核失败。')
-  } finally {
-    submitting.value = false
-  }
+    },
+    successText: `已拒绝《${item.title}》并记录原因`,
+    successType: 'danger',
+    fallbackError: '拒绝审核失败。',
+    resetAfterSuccess: true,
+  })
 }
 
 onMounted(async () => {

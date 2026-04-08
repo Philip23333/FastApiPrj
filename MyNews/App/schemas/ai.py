@@ -85,3 +85,22 @@ class AIRAGChunkListOut(BaseModel):
 class AIRAGClearOut(BaseModel):
     cleared: bool
     collection_name: str
+
+
+class AIChatHistoryItemOut(BaseModel):
+    id: int
+    question: str
+    answer: str
+    citations: List[AIQACitationOut] = Field(default_factory=list)
+    model: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class AIUserMemoryOut(BaseModel):
+    user_id: int
+    memory_text: str
+    updated_at: Optional[datetime] = None
+
+
+class AIClearHistoryOut(BaseModel):
+    deleted_count: int
