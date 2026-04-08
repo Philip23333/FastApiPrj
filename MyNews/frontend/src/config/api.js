@@ -1,3 +1,8 @@
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8080'
+const rawBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api'
 
-export const withApiBase = (path = '') => `${API_BASE_URL}${path}`
+export const API_BASE_URL = rawBaseUrl.replace(/\/$/, '')
+
+export const withApiBase = (path = '') => {
+	const safePath = path.startsWith('/') ? path : `/${path}`
+	return `${API_BASE_URL}${safePath}`
+}

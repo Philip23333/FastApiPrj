@@ -1,38 +1,26 @@
-# Logs
-logs
+# Backend local/runtime files
+
+# Env files (keep example)
+.env
+.env.*
+!.env.example
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Runtime logs and pid
+logs/
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
+*.pid
 
-node_modules
-dist
-dist-ssr
-*.local
+# User upload runtime files
+static/uploads/
 
-# Editor directories and files
+# Editor and OS
 .vscode/*
 !.vscode/extensions.json
 .idea
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
 *.sw?
-
-# pictures
-*.jpg
-*.jpeg
-*.png
-*.gif
-*.bmp
-*.svg
-*.ico
-
-# env files
-.env
-.env.*
-!.env.example
