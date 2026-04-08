@@ -1,46 +1,54 @@
-# --- 数据库文件 (绝对不要上传) ---
-mysql_data/
-*.sql
-*.db
-*.sqlite3
+# -----------------------------
+# Local/Server non-sync files
+# -----------------------------
 
-# --- Python ---
+# Environment secrets
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Python cache/runtime
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
 venv/
 env/
-.env
-.pytest_cache/
 
-# --- 前端 Node ---
+# Logs and temp files
+*.log
+logs/
+*.pid
+*.tmp
+
+# Node/Vite build artifacts
 node_modules/
 dist/
-*.log
+dist-ssr/
 
-# --- 编辑器 ---
+# IDE and OS files
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# --- 系统文件 ---
 .DS_Store
 Thumbs.db
 
-# --- markdown ---
-*.md
-
-# --- qdrant ---
+# Runtime data volumes (do not sync)
+mysql_data/
 qdrant_storage/
 
-# --- 图片 ---
-*.jpg
-*.jpeg
-*.png
-*.gif
+# Local databases/backups
+*.db
+*.sqlite3
+*.sql
 
-# --- test测试文件 ---
-test/
+# User accidentally generated files at repo root
+/2.7.4
+/udo supervisorctl tail -f fastapi-backend

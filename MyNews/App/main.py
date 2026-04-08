@@ -10,13 +10,32 @@ from fastapi.staticfiles import StaticFiles
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def resolve_env_file() -> str:
+    explicit = os.getenv("ENV_FILE", "").strip()
+    if explicit:
+        return explicit if os.path.isabs(explicit) else os.path.join(BASE_DIR, explicit)
+
+    candidates = [
+        os.path.join(BASE_DIR, ".env"),
+        os.path.join(BASE_DIR, ".env.production"),
+        os.path.join(BASE_DIR, ".env.develop"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return os.path.join(BASE_DIR, ".env")
+
+
+load_dotenv(resolve_env_file())
+
 from routers import ai, favorite, news, users, history, upload
 from config.db_config import async_engine
 from utils.response import ApiResponse, ErrorResponse, ValidationErrorItem, success_response, error_response
 from config.cache_config import redis_client
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 
 @asynccontextmanager
