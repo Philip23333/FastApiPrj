@@ -61,6 +61,47 @@ const askerId = computed(() => {
   return '访客'
 })
 
+// 统一提取接口错误信息。
+const getApiErrorMessage = (error, fallback) => {
+  return error?.response?.data?.message || error?.response?.data?.detail || fallback
+}
+
+// 从 SSE 缓冲区中切出一个完整事件块（兼容 LF/CRLF）。
+const splitSseEventBlock = (bufferRef) => {
+  const lfBoundary = bufferRef.value.indexOf('\n\n')
+  const crlfBoundary = bufferRef.value.indexOf('\r\n\r\n')
+
+  if (lfBoundary < 0 && crlfBoundary < 0) return null
+  if (lfBoundary >= 0 && (crlfBoundary < 0 || lfBoundary < crlfBoundary)) {
+    const block = bufferRef.value.slice(0, lfBoundary)
+    bufferRef.value = bufferRef.value.slice(lfBoundary + 2)
+    return block
+  }
+  const block = bufferRef.value.slice(0, crlfBoundary)
+  bufferRef.value = bufferRef.value.slice(crlfBoundary + 4)
+  return block
+}
+
+// 解析单个 SSE 事件块，提取 event 名和 data 文本。
+const parseSseEvent = (block) => {
+  let eventName = 'message'
+  let dataText = ''
+  const lines = block.split('\n')
+  for (const line of lines) {
+    if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim()
+      continue
+    }
+    if (line.startsWith('data:')) {
+      dataText += line.slice(5).trimStart()
+    }
+  }
+  return {
+    eventName,
+    payload: dataText ? JSON.parse(dataText) : {},
+  }
+}
+
 const renderMarkdown = (content) => {
   const parsed = marked.parse(content || '', {
     gfm: true,
@@ -93,11 +134,13 @@ const closeCitationDetail = () => {
 }
 
 const openAIPanel = () => {
+  // 打开 AI 面板时立即恢复历史问答。
   if (!currentUser.value?.id) {
     showAuthModal.value = true
     return
   }
   showAIPanel.value = true
+  loadQaHistory()
 }
 
 const closeAIPanel = () => {
@@ -112,6 +155,7 @@ const scrollQaToBottom = async () => {
 }
 
 const askRagQuestion = async () => {
+  // SSE 问答主流程：先插入占位消息，再按 delta 增量渲染。
   const question = qaQuestion.value.trim()
   if (!question || qaLoading.value) return
 
@@ -126,24 +170,148 @@ const askRagQuestion = async () => {
   await scrollQaToBottom()
 
   qaLoading.value = true
+  qaMessages.value.push({
+    role: 'assistant',
+    content: '',
+    citations: [],
+    model: '',
+    time: new Date().toLocaleTimeString(),
+    streaming: true,
+    typingStatus: '正在连接问答服务...',
+  })
+  const assistantIndex = qaMessages.value.length - 1
+  await scrollQaToBottom()
+
   try {
-    const response = await axios.post(withApiBase('/ai/qa'), {
-      question,
-      top_k: 4,
+    const token = localStorage.getItem('accessToken')
+    const response = await fetch(withApiBase('/ai/qa/stream'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        question,
+        top_k: 4,
+      }),
     })
-    const data = response?.data?.data || {}
-    qaMessages.value.push({
-      role: 'assistant',
-      content: data.answer || '暂时没有生成回答。',
-      citations: Array.isArray(data.citations) ? data.citations : [],
-      model: data.model || '',
-      time: new Date().toLocaleTimeString(),
-    })
-    await scrollQaToBottom()
+
+    if (!response.ok) {
+      let message = `AI问答失败(${response.status})`
+      try {
+        const body = await response.json()
+        message = body?.message || body?.detail || message
+      } catch (_) {
+        // ignore non-json error response
+      }
+      throw new Error(message)
+    }
+
+    if (!response.body) {
+      throw new Error('流式响应不可用，请检查后端配置')
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    const bufferRef = { value: '' }
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      bufferRef.value += decoder.decode(value, { stream: true })
+
+      while (true) {
+        const block = splitSseEventBlock(bufferRef)
+        if (block == null) break
+        if (!block.trim()) continue
+
+        const { eventName, payload } = parseSseEvent(block)
+        const assistantMsg = qaMessages.value[assistantIndex]
+        if (!assistantMsg) continue
+
+        if (eventName === 'status') {
+          assistantMsg.typingStatus = payload?.message || ''
+        } else if (eventName === 'citations') {
+          assistantMsg.citations = Array.isArray(payload?.citations) ? payload.citations : []
+        } else if (eventName === 'delta') {
+          assistantMsg.content += payload?.content || ''
+          await scrollQaToBottom()
+        } else if (eventName === 'done') {
+          assistantMsg.model = payload?.model || ''
+          assistantMsg.citations = Array.isArray(payload?.citations) ? payload.citations : []
+          assistantMsg.streaming = false
+          assistantMsg.typingStatus = ''
+          await scrollQaToBottom()
+        } else if (eventName === 'error') {
+          throw new Error(payload?.message || 'AI问答失败，请稍后重试')
+        }
+      }
+    }
+
+    const assistantMsg = qaMessages.value[assistantIndex]
+    if (assistantMsg) {
+      assistantMsg.streaming = false
+      assistantMsg.typingStatus = ''
+      if (!assistantMsg.content.trim()) {
+        assistantMsg.content = '暂时没有生成回答。'
+      }
+    }
   } catch (err) {
-    qaError.value = err?.response?.data?.message || err?.response?.data?.detail || 'AI问答失败，请稍后重试'
+    const assistantMsg = qaMessages.value[assistantIndex]
+    if (assistantMsg) {
+      assistantMsg.streaming = false
+      assistantMsg.typingStatus = ''
+    }
+    qaError.value = err?.message || getApiErrorMessage(err, 'AI问答失败，请稍后重试')
   } finally {
     qaLoading.value = false
+  }
+}
+
+const formatChatTime = (value) => {
+  if (!value) return new Date().toLocaleTimeString()
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return new Date().toLocaleTimeString()
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+const loadQaHistory = async () => {
+  // 每次打开面板时拉取最近历史，按“问->答”顺序重建会话。
+  if (!currentUser.value?.id) return
+  try {
+    const response = await axios.get(withApiBase('/ai/qa/history'), {
+      params: { page: 1, size: 20 },
+    })
+    const items = response?.data?.data?.items
+    if (!Array.isArray(items)) return
+
+    const messages = []
+    const ordered = [...items].reverse()
+    for (const item of ordered) {
+      const question = String(item?.question || '').trim()
+      const answer = String(item?.answer || '').trim()
+      if (!question || !answer) continue
+
+      messages.push({
+        role: 'user',
+        content: question,
+        askerId: askerId.value,
+        time: formatChatTime(item?.created_at),
+      })
+      messages.push({
+        role: 'assistant',
+        content: answer,
+        citations: Array.isArray(item?.citations) ? item.citations : [],
+        model: item?.model || '',
+        time: formatChatTime(item?.created_at),
+        streaming: false,
+        typingStatus: '',
+      })
+    }
+    qaMessages.value = messages
+    await scrollQaToBottom()
+  } catch (err) {
+    qaError.value = getApiErrorMessage(err, '加载问答历史失败')
   }
 }
 
@@ -162,6 +330,7 @@ const fetchCategories = async () => {
 // 获取新闻流（今日头条是无限滚动/点加载更多模式）
 // append 参数决定是直接覆盖还是追加数据
 const fetchNews = async (page = 1, append = false) => {
+  // 信息流分页加载：append 为 true 时执行“加载更多”追加模式。
   if (loading.value) return
   loading.value = true
   errorMsg.value = ''
@@ -210,6 +379,7 @@ const loadMore = () => {
 }
 
 const fetchHotList = async (page = 1) => {
+  // 热榜分页加载；触底后由调用方决定是否回到第一页。
   if (hotLoading.value) return false
 
   hotLoading.value = true
@@ -464,6 +634,8 @@ const handlePublishClickFromNav = () => {
               v-html="renderMarkdown(msg.content)"
             ></div>
             <div v-else class="ai-msg-content">{{ msg.content }}</div>
+            <div v-if="msg.role === 'assistant' && msg.typingStatus" class="ai-stream-status">{{ msg.typingStatus }}</div>
+            <span v-if="msg.role === 'assistant' && msg.streaming" class="typing-cursor">▍</span>
 
             <div v-if="msg.role === 'assistant' && msg.citations?.length" class="citation-links">
               <button
@@ -947,6 +1119,25 @@ body {
   white-space: pre-wrap;
   line-height: 1.55;
   color: #1e293b;
+}
+
+.ai-stream-status {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.typing-cursor {
+  display: inline-block;
+  margin-top: 4px;
+  color: #2563eb;
+  animation: ai-cursor-blink 1s steps(2, start) infinite;
+}
+
+@keyframes ai-cursor-blink {
+  to {
+    visibility: hidden;
+  }
 }
 
 .markdown-content :deep(*) {

@@ -34,12 +34,23 @@ load_dotenv(resolve_env_file())
 
 from routers import ai, favorite, news, users, history, upload
 from config.db_config import async_engine
+from models.ai_chat import AIChatHistory, AIUserMemory
 from utils.response import ApiResponse, ErrorResponse, ValidationErrorItem, success_response, error_response
 from config.cache_config import redis_client
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # 确保AI问答历史与记忆表存在（仅创建缺失表，不影响已有表结构）。
+    async with async_engine.begin() as conn:
+        await conn.run_sync(
+            AIChatHistory.__table__.create,
+            checkfirst=True,
+        )
+        await conn.run_sync(
+            AIUserMemory.__table__.create,
+            checkfirst=True,
+        )
     try:
         yield
     finally:

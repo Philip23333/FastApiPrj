@@ -31,6 +31,7 @@ class RAGService:
         self.embedding_model = os.getenv("AI_EMBEDDING_MODEL", "text-embedding-3-small").strip()
         self.embedding_timeout = float(os.getenv("AI_EMBEDDING_TIMEOUT_SECONDS", "30"))
         self.embed_batch_size = int(os.getenv("RAG_EMBED_BATCH_SIZE", "10"))
+        self.min_relevance_score = float(os.getenv("RAG_MIN_RELEVANCE_SCORE", "0.3"))
         self.collection_name = os.getenv("RAG_QDRANT_COLLECTION", "mynews_rag")
         self.qdrant_url = os.getenv("QDRANT_URL", "http://127.0.0.1:6333").strip()
         self.qdrant_api_key = os.getenv("QDRANT_API_KEY", "").strip()
@@ -510,24 +511,55 @@ class RAGService:
         end = start + safe_size
         return AIRAGChunkListOut(items=all_items[start:end], page=safe_page, size=safe_size, total=total)
 
-    async def answer_question(self, question: str, top_k: int, ai_client: AIClient) -> AIQAOut:
+    async def answer_question(
+        self,
+        question: str,
+        top_k: int,
+        ai_client: AIClient,
+        user_memory: str | None = None,
+        history_context: list[str] | None = None,
+    ) -> AIQAOut:
+        messages, citations = await self.build_qa_messages_and_citations(
+            question=question,
+            top_k=top_k,
+            user_memory=user_memory,
+            history_context=history_context,
+        )
+
+        answer, model = await ai_client.chat_messages(messages=messages, temperature=0.2)
+
+        return AIQAOut(answer=answer, model=model, citations=citations)
+
+    async def build_qa_messages_and_citations(
+        self,
+        question: str,
+        top_k: int,
+        user_memory: str | None = None,
+        history_context: list[str] | None = None,
+    ) -> tuple[list, list[AIQACitationOut]]:
         if not self.api_key:
             raise AIClientError("AI_API_KEY 未配置，无法执行RAG问答")
         if not self._collection_exists():
             raise AIClientError("RAG 索引为空，请先执行索引构建")
 
-        points_count = self.qdrant.count(collection_name=self.collection_name, exact=True).count
+        points_count = (
+            await asyncio.to_thread(
+                lambda: self.qdrant.count(collection_name=self.collection_name, exact=True).count
+            )
+        )
         if points_count <= 0:
             raise AIClientError("RAG 索引为空，请先执行索引构建")
 
         query_vector = await self._embed_query(question)
 
-        ranked = self.qdrant.search(
-            collection_name=self.collection_name,
-            query_vector=query_vector,
-            limit=top_k,
-            with_payload=True,
-            with_vectors=False,
+        ranked = await asyncio.to_thread(
+            lambda: self.qdrant.search(
+                collection_name=self.collection_name,
+                query_vector=query_vector,
+                limit=top_k,
+                with_payload=True,
+                with_vectors=False,
+            )
         )
 
         citations = [
@@ -538,21 +570,27 @@ class RAGService:
                 score=round(float(item.score or 0), 4),
             )
             for item in ranked
-            if (item.payload or {}).get("news_id")
+            if (item.payload or {}).get("news_id") and float(item.score or 0) >= self.min_relevance_score
         ]
 
         if not citations:
-            raise AIClientError("未检索到相关内容，请尝试更具体的问题")
+            raise AIClientError(
+                f"未检索到满足相关度阈值(>={self.min_relevance_score})的内容，请尝试更具体的问题"
+            )
 
         context_blocks = [
             f"[来源{i+1}] 新闻ID={c.news_id} 标题={c.title}\n片段：{c.snippet}"
             for i, c in enumerate(citations)
         ]
 
-        messages = build_qa_messages(question=question, context_blocks=context_blocks)
-        answer, model = await ai_client.chat_messages(messages=messages, temperature=0.2)
+        if user_memory:
+            context_blocks.append(f"[用户长期记忆]\n{user_memory}")
+        if history_context:
+            for idx, item in enumerate(history_context[:5]):
+                context_blocks.append(f"[用户最近问答{idx+1}]\n{item}")
 
-        return AIQAOut(answer=answer, model=model, citations=citations)
+        messages = build_qa_messages(question=question, context_blocks=context_blocks)
+        return messages, citations
 
 
 rag_service = RAGService()

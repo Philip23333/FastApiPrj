@@ -9,10 +9,21 @@ from utils.jwt_auth import decode_access_token
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/users/token")
 
+
+def _ensure_active_user(user: User) -> User:
+    """统一校验账号状态，禁用账号拒绝访问受保护接口。"""
+    if user.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="账号已被禁用",
+        )
+    return user
+
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
+    """根据 Bearer Token 解析并返回当前用户。"""
     credentials_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid token",
@@ -45,24 +56,13 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # 关键校验：禁用账号不允许访问受保护接口。
-    if db_user.status != "active":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="账号已被禁用",
-        )
-
-    return db_user
+    return _ensure_active_user(db_user)
 
 async def get_current_admin_user(
     current_user: User = Depends(get_current_user),
 ) -> User:
-    # 关键校验：仅激活状态账号允许进入后台管理接口。
-    if current_user.status != "active":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="账号已被禁用",
-        )
+    """要求当前用户为管理员。"""
+    _ensure_active_user(current_user)
 
     # 关键校验：用户管理接口只允许 admin 角色访问。
     if current_user.role != "admin":
@@ -77,12 +77,8 @@ async def get_current_admin_user(
 async def get_current_reviewer_or_admin_user(
     current_user: User = Depends(get_current_user),
 ) -> User:
-    # 审核后台允许 reviewer/admin 访问，disabled 账号仍禁止。
-    if current_user.status != "active":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="账号已被禁用",
-        )
+    """要求当前用户为审核员或管理员。"""
+    _ensure_active_user(current_user)
 
     if current_user.role not in {"reviewer", "admin"}:
         raise HTTPException(
