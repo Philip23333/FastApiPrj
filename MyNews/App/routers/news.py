@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from config.db_config import get_db
 from crud import news as news_crud
+from crud import like as like_crud
 from dependencies.auth import get_current_admin_user, get_current_reviewer_or_admin_user, get_current_user
 from models.user import User
 from schemas.news import CategoryOut, HotNewsItemOut, NewsAdminItemOut, NewsAdminModerationIn, NewsAuthorItemOut, NewsCreate, NewsDetailOut, NewsListItemOut, SearchNewsItemOut, SearchSuggestionOut
@@ -162,6 +163,8 @@ async def search_news(q: str, page: int = 1, size: int = 10, db: AsyncSession = 
             category_name=n.category.name if n.category else "未知",
             author=n.author,
             views=n.views,
+            like_count=n.like_count,
+            comment_count=n.comment_count,
             publish_time=n.publish_time,
             image=n.image,
             relevance=int(relevance),
@@ -211,6 +214,8 @@ async def create_news(
         category_name=category.name if category else "未知",
         author=created.author,
         views=created.views,
+        like_count=created.like_count,
+        comment_count=created.comment_count,
         publish_time=created.publish_time,
         image=created.image,
     )
@@ -272,6 +277,8 @@ async def update_news(
         category_name=category.name,
         author=updated.author,
         views=updated.views,
+        like_count=updated.like_count,
+        comment_count=updated.comment_count,
         publish_time=updated.publish_time,
         image=updated.image,
         audit_status=updated.audit_status,
@@ -314,6 +321,8 @@ async def get_my_news(
             category_name=n.category.name if n.category else "未知",
             author=n.author,
             views=n.views,
+            like_count=n.like_count,
+            comment_count=n.comment_count,
             publish_time=n.publish_time,
             image=n.image,
             audit_status=n.audit_status,
@@ -388,6 +397,8 @@ async def get_editable_news_detail(
         category_name=db_news.category.name if db_news.category else "未知",
         author=db_news.author,
         views=db_news.views,
+        like_count=db_news.like_count,
+        comment_count=db_news.comment_count,
         publish_time=db_news.publish_time,
         image=db_news.image,
         audit_status=db_news.audit_status,
@@ -428,6 +439,8 @@ async def admin_get_news_list(
             category_name=n.category.name if n.category else "未知",
             author=n.author,
             views=n.views,
+            like_count=n.like_count,
+            comment_count=n.comment_count,
             publish_time=n.publish_time,
             image=n.image,
             audit_status=n.audit_status,
@@ -506,6 +519,8 @@ async def admin_moderate_news(
             category_name=category.name if category else "未知",
             author=updated.author,
             views=updated.views,
+            like_count=updated.like_count,
+            comment_count=updated.comment_count,
             publish_time=updated.publish_time,
             image=updated.image,
             audit_status=updated.audit_status,
@@ -548,6 +563,8 @@ async def get_news(page: int = 1, size: int = 10, db: AsyncSession = Depends(get
                 category_name=n.category.name if n.category else "未知",
                 author=n.author,
                 views=n.views,
+                like_count=n.like_count,
+                comment_count=n.comment_count,
                 publish_time=n.publish_time,
                 image=n.image,
             )
@@ -636,6 +653,7 @@ async def get_hot_news(
 @router.get("/detail/{news_id}", response_model=ApiResponse[NewsDetailOut],)
 async def get_news_by_id(
     news_id: int, 
+    increase_view: bool = True,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
     ):
@@ -644,15 +662,18 @@ async def get_news_by_id(
 # 先增加权限校验，确保只有登录用户才能访问新闻详情接口。之后再查询新闻详情并返回。
     _ensure_logged_in(current_user)
 
-    news = await news_crud.get_news_by_id(db, news_id=news_id)
+    news = await news_crud.get_news_by_id(db, news_id=news_id) if increase_view else await news_crud.get_news_by_id_plain(db, news_id=news_id)
     if not news:
         raise HTTPException(status_code=404, detail="News not found")
     if news.is_deleted or news.audit_status == "rejected":
         raise HTTPException(status_code=404, detail="新闻已下架")
-    await db.commit()
+    if increase_view:
+        await db.commit()
 
-    # 详情访问会增加浏览量，主动失效列表/分类/热榜缓存，减少前台浏览量展示滞后。
-    await _invalidate_all_news_cache()
+        # 详情访问会增加浏览量，主动失效列表/分类/热榜缓存，减少前台浏览量展示滞后。
+        await _invalidate_all_news_cache()
+
+    is_liked = await like_crud.is_liked(db, user_id=current_user.id, news_id=news_id)
         
     news_data = NewsDetailOut(
         id=news.id,
@@ -663,6 +684,9 @@ async def get_news_by_id(
         category_name=news.category.name if news.category else "未知",
         author=news.author,
         views=news.views,
+        like_count=news.like_count,
+        comment_count=news.comment_count,
+        is_liked=is_liked,
         publish_time=news.publish_time,
         image=news.image,
     )
@@ -722,6 +746,8 @@ async def get_news_by_categories(category_id: int, page: int = 1, size: int = 10
                 category_name=n.category.name if n.category else "未知",
                 author=n.author,
                 views=n.views,
+                like_count=n.like_count,
+                comment_count=n.comment_count,
                 publish_time=n.publish_time,
                 image=n.image,
             )

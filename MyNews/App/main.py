@@ -32,25 +32,16 @@ def resolve_env_file() -> str:
 
 load_dotenv(resolve_env_file())
 
-from routers import ai, favorite, news, users, history, upload
+from routers import ai, favorite, news, users, history, upload, like, comment
 from config.db_config import async_engine
-from models.ai_chat import AIChatHistory, AIUserMemory
 from utils.response import ApiResponse, ErrorResponse, ValidationErrorItem, success_response, error_response
 from config.cache_config import redis_client
+from utils.db_bootstrap import ensure_db_bootstrap
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # 确保AI问答历史与记忆表存在（仅创建缺失表，不影响已有表结构）。
-    async with async_engine.begin() as conn:
-        await conn.run_sync(
-            AIChatHistory.__table__.create,
-            checkfirst=True,
-        )
-        await conn.run_sync(
-            AIUserMemory.__table__.create,
-            checkfirst=True,
-        )
+    await ensure_db_bootstrap(async_engine)
     try:
         yield
     finally:
@@ -115,7 +106,9 @@ async def validation_exception_handler(_: Request, exc: RequestValidationError):
 app.include_router(news.router)
 app.include_router(users.router)
 app.include_router(favorite.router)
+app.include_router(like.router)
 app.include_router(history.router)
+app.include_router(comment.router)
 app.include_router(upload.router)
 app.include_router(ai.router)
 

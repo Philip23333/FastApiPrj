@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, watch, computed } from 'vue'
+import { ref, onMounted, watch, computed, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import axios from 'axios'
 import DOMPurify from 'dompurify'
@@ -29,11 +29,19 @@ const errorMsg = ref('')
 const showAuthModal = ref(false)
 const favoriteLoading = ref(false)
 const isFavorited = ref(false)
+const likeLoading = ref(false)
+const isLiked = ref(false)
+const likeCount = ref(0)
+const comments = ref([])
+const commentsLoading = ref(false)
+const commentsError = ref('')
+const highlightedCommentId = ref(0)
 const showSummaryDrawer = ref(false)
 const summaryLoading = ref(false)
 const summaryError = ref('')
-const summaryInput = ref('提炼新闻要点，快速了解核心信息')
-const summaryMessages = ref([])
+const summaryContent = ref('')
+const summaryModel = ref('')
+const summaryTime = ref('')
 
 // 相关推荐数据
 const relatedNews = ref([])
@@ -92,6 +100,8 @@ const fetchNewsDetail = async () => {
     const response = await axios.get(withApiBase(`/news/detail/${newsId.value}`))
     if (response.data && response.data.code === 200) {
       newsItem.value = response.data.data
+      isLiked.value = !!response.data.data?.is_liked
+      likeCount.value = Number(response.data.data?.like_count || 0)
       
       // 获取分类相关推荐
       if (newsItem.value.category_id) {
@@ -105,6 +115,39 @@ const fetchNewsDetail = async () => {
     errorMsg.value = '获取文章详情失败'
   } finally {
     loading.value = false
+  }
+}
+
+const fetchComments = async () => {
+  if (!newsId.value) return
+  commentsLoading.value = true
+  commentsError.value = ''
+  try {
+    const res = await axios.get(withApiBase(`/comments/news/${newsId.value}?page=1&size=100`))
+    if (res.data?.code === 200) {
+      comments.value = res.data?.data?.items || []
+      await nextTick()
+      const targetCommentId = Number(route.query.commentId || 0)
+      if (targetCommentId) {
+        const target = document.getElementById(`comment-${targetCommentId}`)
+        if (target) {
+          highlightedCommentId.value = targetCommentId
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          setTimeout(() => {
+            if (highlightedCommentId.value === targetCommentId) {
+              highlightedCommentId.value = 0
+            }
+          }, 2200)
+        }
+      }
+      return
+    }
+    comments.value = []
+  } catch (err) {
+    commentsError.value = err?.response?.data?.message || '评论加载失败，请稍后重试'
+    comments.value = []
+  } finally {
+    commentsLoading.value = false
   }
 }
 
@@ -164,36 +207,53 @@ const toggleFavorite = async () => {
   }
 }
 
+const toggleLike = async () => {
+  if (likeLoading.value) return
+
+  if (!currentUser.value?.id) {
+    showAuthModal.value = true
+    return
+  }
+
+  likeLoading.value = true
+  try {
+    const request = isLiked.value
+      ? axios.delete(withApiBase(`/likes/${newsId.value}`))
+      : axios.post(withApiBase(`/likes/${newsId.value}`))
+    const res = await request
+    if (res.data?.code === 200) {
+      isLiked.value = !!res.data?.data?.is_liked
+      likeCount.value = Number(res.data?.data?.like_count || 0)
+      if (newsItem.value) {
+        newsItem.value.like_count = likeCount.value
+      }
+    }
+  } catch (err) {
+    alert(err?.response?.data?.message || '点赞操作失败，请稍后重试')
+  } finally {
+    likeLoading.value = false
+  }
+}
+
 const renderSummaryMarkdown = (content) => {
   const raw = content || ''
   const parsed = marked.parse(raw, { gfm: true, breaks: true })
   return DOMPurify.sanitize(typeof parsed === 'string' ? parsed : '')
 }
 
-const sendSummaryQuestion = async (question) => {
-  const text = (question || summaryInput.value || '').trim()
-  if (!text || summaryLoading.value) return
-
+const generateSummary = async () => {
+  if (summaryLoading.value) return
   summaryError.value = ''
-  summaryMessages.value.push({
-    role: 'user',
-    content: text,
-    time: new Date().toLocaleTimeString(),
-  })
-
   summaryLoading.value = true
   try {
     const response = await axios.post(withApiBase(`/ai/news/${newsId.value}/chat`), {
-      question: text,
+      question: '请基于当前新闻内容给出一份结构化全文总结，突出关键信息、背景与影响。',
       temperature: 0.2,
     })
     const data = response?.data?.data || {}
-    summaryMessages.value.push({
-      role: 'assistant',
-      content: data.answer || 'AI未生成总结内容。',
-      model: data.model || '',
-      time: new Date().toLocaleTimeString(),
-    })
+    summaryContent.value = data.answer || 'AI未生成总结内容。'
+    summaryModel.value = data.model || ''
+    summaryTime.value = new Date().toLocaleTimeString()
   } catch (err) {
     summaryError.value = err?.response?.data?.message || err?.response?.data?.detail || 'AI总结失败，请稍后再试'
   } finally {
@@ -208,8 +268,8 @@ const openSummaryDrawer = async () => {
   }
   showSummaryDrawer.value = true
 
-  if (summaryMessages.value.length === 0 && !summaryLoading.value) {
-    await sendSummaryQuestion(summaryInput.value)
+  if (!summaryContent.value && !summaryLoading.value) {
+    await generateSummary()
   }
 }
 
@@ -222,6 +282,7 @@ watch(() => route.params.id, (newId) => {
     newsId.value = newId
     fetchNewsDetail()
     fetchFavoriteStatus()
+    fetchComments()
     reportViewHistory()
   }
 })
@@ -240,12 +301,14 @@ onMounted(() => {
   restoreCurrentUser()
   fetchNewsDetail()
   fetchFavoriteStatus()
+  fetchComments()
   reportViewHistory()
 })
 
 const handleAuthSuccessFromModal = async (payload) => {
   handleAuthSuccess(payload)
   await fetchFavoriteStatus()
+  await fetchComments()
   await reportViewHistory()
 }
 </script>
@@ -267,11 +330,11 @@ const handleAuthSuccessFromModal = async (payload) => {
         <div class="action-panel">
           <div class="action-btn">
             <span class="icon">💬</span>
-            <span class="text">评论</span>
+            <span class="text">评论 {{ newsItem?.comment_count || comments.length || 0 }}</span>
           </div>
-          <div class="action-btn">
+          <div class="action-btn" :class="{ active: isLiked }" @click="toggleLike">
             <span class="icon">👍</span>
-            <span class="text">点赞</span>
+            <span class="text">{{ likeLoading ? '处理中' : `点赞 ${likeCount}` }}</span>
           </div>
           <div
             class="action-btn"
@@ -304,6 +367,31 @@ const handleAuthSuccessFromModal = async (payload) => {
              <img v-if="newsItem.image" :src="toAbsoluteUrl(newsItem.image)" class="article-cover" alt="封面配图"/>
              <div class="rich-content" v-html="renderedContentHtml"></div>
           </div>
+
+          <section class="comment-section">
+            <div class="comment-head">
+              <h3>评论区</h3>
+              <span>{{ newsItem?.comment_count || comments.length || 0 }} 条评论</span>
+            </div>
+            <div v-if="commentsLoading" class="comment-tip">正在加载评论...</div>
+            <p v-else-if="commentsError" class="comment-tip error">{{ commentsError }}</p>
+            <div v-else-if="comments.length === 0" class="comment-tip">暂无评论，快来抢沙发吧。</div>
+            <div v-else class="comment-list">
+              <article
+                v-for="item in comments"
+                :id="`comment-${item.id}`"
+                :key="item.id"
+                class="comment-item"
+                :class="{ focused: highlightedCommentId === item.id }"
+              >
+                <div class="comment-meta">
+                  <span class="author">{{ item.nickname || item.username || '用户' }}</span>
+                  <span>{{ formatTime(item.created_at) }}</span>
+                </div>
+                <p class="comment-content">{{ item.content }}</p>
+              </article>
+            </div>
+          </section>
           
           <!-- 相关推荐区域 -->
           <div class="related-recommendation">
@@ -345,7 +433,7 @@ const handleAuthSuccessFromModal = async (payload) => {
         </div>
       </aside>
 
-      <button class="summary-float-trigger" type="button" @click="openSummaryDrawer">
+      <button v-if="!showSummaryDrawer" class="summary-float-trigger" type="button" @click="openSummaryDrawer">
         一键总结
       </button>
     </main>
@@ -354,42 +442,24 @@ const handleAuthSuccessFromModal = async (payload) => {
       <section class="summary-drawer">
         <header>
           <div>
-            <h3>AI总结对话</h3>
+            <h3>AI全文总结</h3>
             <p>{{ newsItem?.title || '' }}</p>
           </div>
           <button type="button" class="summary-close" aria-label="收起总结对话" @click="closeSummaryDrawer">×</button>
         </header>
 
         <div class="summary-body">
-          <article
-            v-for="(msg, idx) in summaryMessages"
-            :key="`sum-${idx}`"
-            class="summary-chat-item"
-            :class="msg.role"
-          >
+          <article v-if="summaryContent" class="summary-chat-item assistant">
             <div class="summary-chat-meta">
-              <span>{{ msg.role === 'user' ? (currentUser?.nickname || currentUser?.username || '你') : 'AI助手' }}</span>
-              <span>{{ msg.time }}</span>
-              <span v-if="msg.model" class="summary-chat-model">{{ msg.model }}</span>
+              <span>AI助手</span>
+              <span>{{ summaryTime }}</span>
+              <span v-if="summaryModel" class="summary-chat-model">{{ summaryModel }}</span>
             </div>
-            <div v-if="msg.role === 'assistant'" class="summary-chat-content" v-html="renderSummaryMarkdown(msg.content)"></div>
-            <div v-else class="summary-chat-content plain">{{ msg.content }}</div>
+            <div class="summary-chat-content" v-html="renderSummaryMarkdown(summaryContent)"></div>
           </article>
 
           <div v-if="summaryLoading" class="summary-loading">正在生成总结...</div>
           <p v-if="summaryError" class="summary-error">{{ summaryError }}</p>
-
-          <div class="summary-composer">
-            <textarea
-              v-model="summaryInput"
-              rows="3"
-              placeholder="提炼新闻要点，快速了解核心信息"
-              @keydown.ctrl.enter.prevent="sendSummaryQuestion()"
-            ></textarea>
-            <button type="button" :disabled="summaryLoading" @click="sendSummaryQuestion()">
-              {{ summaryLoading ? '生成中...' : '发送' }}
-            </button>
-          </div>
         </div>
       </section>
     </section>
@@ -564,6 +634,78 @@ const handleAuthSuccessFromModal = async (payload) => {
   object-fit: cover;
   border-radius: 6px;
   margin-bottom: 20px;
+}
+
+.comment-section {
+  margin-top: 26px;
+  border-top: 1px solid #e8e8e8;
+  padding-top: 16px;
+}
+
+.comment-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.comment-head h3 {
+  margin: 0;
+  font-size: 20px;
+  color: #1f2937;
+}
+
+.comment-head span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.comment-tip {
+  color: #64748b;
+  padding: 10px 0;
+}
+
+.comment-tip.error {
+  color: #b91c1c;
+}
+
+.comment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.comment-item {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+  transition: all 0.22s ease;
+}
+
+.comment-item.focused {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.22);
+}
+
+.comment-meta {
+  display: flex;
+  gap: 8px;
+  color: #6b7280;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.comment-meta .author {
+  color: #111827;
+  font-weight: 600;
+}
+
+.comment-content {
+  margin: 0;
+  color: #334155;
+  line-height: 1.65;
+  white-space: pre-wrap;
 }
 
 /* ================= 底部相关推荐 ================= */
@@ -804,11 +946,6 @@ const handleAuthSuccessFromModal = async (payload) => {
   margin-bottom: 10px;
 }
 
-.summary-chat-item.user {
-  background: #eef6ff;
-  border-color: #bfd8ff;
-}
-
 .summary-chat-meta {
   display: flex;
   gap: 8px;
@@ -829,38 +966,6 @@ const handleAuthSuccessFromModal = async (payload) => {
 
 .summary-chat-content :deep(*) {
   text-align: left;
-}
-
-.summary-chat-content.plain {
-  white-space: pre-wrap;
-}
-
-.summary-composer {
-  margin-top: 12px;
-  border-top: 1px solid #e2e8f0;
-  padding-top: 12px;
-}
-
-.summary-composer textarea {
-  width: 100%;
-  border: 1px solid #cbd5e1;
-  background: #f1f5f9;
-  color: #111827;
-  border-radius: 8px;
-  resize: vertical;
-  padding: 10px;
-  font-size: 14px;
-}
-
-.summary-composer button {
-  margin-top: 8px;
-  border: none;
-  background: #1d4ed8;
-  color: #fff;
-  border-radius: 8px;
-  height: 34px;
-  padding: 0 14px;
-  cursor: pointer;
 }
 
 @media (max-width: 1240px) {

@@ -47,6 +47,8 @@ class News(Base):
     author: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="作者")
     category_id: Mapped[int] = mapped_column(Integer, ForeignKey("news_category.id", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False, comment="分类ID")
     views: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="浏览量")
+    like_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="点赞数")
+    comment_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="评论数")
     publish_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False, comment="发布时间")
     # 审核状态：后台可基于该字段做待审/通过/驳回列表
     audit_status: Mapped[str] = mapped_column(
