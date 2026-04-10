@@ -13,7 +13,7 @@ class Comment(Base):
         {"comment": "评论表"},
     )
 
-    id = Column(Integer, primary_key=True, autoincrement=True, comment="评论ID")
+    id = Column(MYSQL_INTEGER(unsigned=True), primary_key=True, autoincrement=True, comment="评论ID")
     user_id = Column(
         MYSQL_INTEGER(unsigned=True),
         ForeignKey("user.id", ondelete="CASCADE", onupdate="CASCADE"),

@@ -1,6 +1,5 @@
 from sqlalchemy import Column, ForeignKey, Integer, Text, TIMESTAMP, UniqueConstraint, Index, text
 from sqlalchemy.dialects.mysql import INTEGER as MYSQL_INTEGER
-
 from models.news import Base
 
 
