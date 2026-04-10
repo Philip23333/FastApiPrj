@@ -1,12 +1,9 @@
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from models.comment import Comment
 from models.news import News
-from models.user import User
-
-
 async def get_comments_count_by_news(db: AsyncSession, news_id: int) -> int:
     stmt = select(func.count(Comment.id)).where(Comment.news_id == news_id)
     res = await db.execute(stmt)
@@ -45,8 +42,20 @@ async def get_comments_by_user(db: AsyncSession, user_id: int, offset: int = 0, 
     return res.scalars().all()
 
 
-async def create_comment(db: AsyncSession, user_id: int, news_id: int, content: str) -> Comment:
-    comment = Comment(user_id=user_id, news_id=news_id, content=content)
+async def get_comment_by_id(db: AsyncSession, comment_id: int) -> Comment | None:
+    stmt = select(Comment).where(Comment.id == comment_id)
+    res = await db.execute(stmt)
+    return res.scalar_one_or_none()
+
+
+async def create_comment(
+    db: AsyncSession,
+    user_id: int,
+    news_id: int,
+    content: str,
+    parent_comment_id: int | None = None,
+) -> Comment:
+    comment = Comment(user_id=user_id, news_id=news_id, content=content, parent_comment_id=parent_comment_id)
     db.add(comment)
     await db.flush()
 

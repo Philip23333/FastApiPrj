@@ -37,7 +37,9 @@ async def get_comments_by_news(
             username=item.user.username if item.user else "用户",
             nickname=item.user.nickname if item.user else None,
             content=item.content,
+            parent_comment_id=item.parent_comment_id,
             created_at=item.created_at,
+            replies=[],
         )
         for item in items
     ]
@@ -79,7 +81,19 @@ async def create_comment(
     if not news or news.is_deleted or news.audit_status == "rejected":
         raise HTTPException(status_code=404, detail="新闻已下架")
 
-    item = await comment_crud.create_comment(db, user_id=current_user.id, news_id=news_id, content=comment_in.content.strip())
+    parent_comment_id = comment_in.parent_comment_id
+    if parent_comment_id is not None:
+        parent_comment = await comment_crud.get_comment_by_id(db, parent_comment_id)
+        if not parent_comment or parent_comment.news_id != news_id:
+            raise HTTPException(status_code=400, detail="父评论不存在或不属于当前新闻")
+
+    item = await comment_crud.create_comment(
+        db,
+        user_id=current_user.id,
+        news_id=news_id,
+        content=comment_in.content.strip(),
+        parent_comment_id=parent_comment_id,
+    )
     await db.commit()
 
     payload = CommentNewsItemOut(
@@ -89,6 +103,8 @@ async def create_comment(
         username=current_user.username,
         nickname=current_user.nickname,
         content=item.content,
+        parent_comment_id=item.parent_comment_id,
         created_at=item.created_at,
+        replies=[],
     )
     return success_response(payload, message="评论成功")

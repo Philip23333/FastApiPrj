@@ -26,6 +26,12 @@ class Comment(Base):
         nullable=False,
         comment="新闻ID",
     )
+    parent_comment_id = Column(
+        MYSQL_INTEGER(unsigned=True),
+        ForeignKey("news_comment.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=True,
+        comment="父评论ID",
+    )
     content = Column(Text, nullable=False, comment="评论内容")
     created_at = Column(TIMESTAMP, nullable=False, server_default=text("CURRENT_TIMESTAMP"), comment="评论时间")
     updated_at = None

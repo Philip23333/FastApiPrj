@@ -23,6 +23,24 @@ async def _ensure_news_column(conn, column_name: str, ddl_sql: str):
         await conn.execute(text(ddl_sql))
 
 
+async def _ensure_comment_column(conn, column_name: str, ddl_sql: str):
+    exists_res = await conn.execute(
+        text(
+            """
+            SELECT 1
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'news_comment'
+              AND COLUMN_NAME = :column_name
+            LIMIT 1
+            """
+        ),
+        {"column_name": column_name},
+    )
+    if exists_res.scalar_one_or_none() is None:
+        await conn.execute(text(ddl_sql))
+
+
 async def ensure_db_bootstrap(async_engine):
     # 启动时补齐 AI/点赞/评论相关表，以及新闻冗余计数字段。
     async with async_engine.begin() as conn:
@@ -30,6 +48,12 @@ async def ensure_db_bootstrap(async_engine):
         await conn.run_sync(AIUserMemory.__table__.create, checkfirst=True)
         await conn.run_sync(Like.__table__.create, checkfirst=True)
         await conn.run_sync(Comment.__table__.create, checkfirst=True)
+
+        await _ensure_comment_column(
+            conn,
+            "parent_comment_id",
+            "ALTER TABLE news_comment ADD COLUMN parent_comment_id INT UNSIGNED NULL COMMENT '父评论ID'",
+        )
 
         await _ensure_news_column(
             conn,

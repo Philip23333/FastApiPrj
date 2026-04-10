@@ -459,7 +459,7 @@ const handleLikeCardClick = (newsId) => {
 const handleCommentCardClick = (item) => {
   router.push({
     path: `/news/${item.news_id}`,
-    query: { commentId: String(item.id) },
+    query: { commentId: String(item.id), toComment: '1' },
   })
 }
 
