@@ -1,4 +1,4 @@
-from sqlalchemy import Column, ForeignKey, Integer, Text, TIMESTAMP, func, UniqueConstraint, Index
+from sqlalchemy import Column, ForeignKey, Integer, Text, TIMESTAMP, UniqueConstraint, Index, text
 from sqlalchemy.dialects.mysql import INTEGER as MYSQL_INTEGER
 
 from models.news import Base
@@ -22,7 +22,12 @@ class AIChatHistory(Base):
     answer = Column(Text, nullable=False, comment="AI回答")
     citations_json = Column(Text, nullable=True, comment="引用来源JSON")
     model = Column(Text, nullable=True, comment="模型名称")
-    created_at = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="创建时间")
+    created_at = Column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+        comment="创建时间",
+    )
     updated_at = None
 
 
@@ -41,5 +46,11 @@ class AIUserMemory(Base):
         comment="用户ID",
     )
     memory_text = Column(Text, nullable=False, comment="用户长期记忆摘要")
-    updated_at = Column(TIMESTAMP, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    updated_at = Column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+        server_onupdate=text("CURRENT_TIMESTAMP"),
+        comment="更新时间",
+    )
     created_at = None

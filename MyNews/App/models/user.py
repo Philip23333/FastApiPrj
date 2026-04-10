@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Enum, TIMESTAMP, func
+from sqlalchemy import Column, Integer, String, Enum, TIMESTAMP, text
 from models.news import Base
 
 class User(Base):
@@ -19,5 +19,16 @@ class User(Base):
     role = Column(Enum('user', 'reviewer', 'admin'), nullable=False, server_default='user', comment="用户角色")
     # 账号状态字段：可用于后台禁用用户而非直接删库
     status = Column(Enum('active', 'disabled'), nullable=False, server_default='active', comment="账号状态")
-    created_at = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="创建时间")
-    updated_at = Column(TIMESTAMP, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    created_at = Column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+        comment="创建时间",
+    )
+    updated_at = Column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+        server_onupdate=text("CURRENT_TIMESTAMP"),
+        comment="更新时间",
+    )

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, ForeignKey, Index, Integer, TIMESTAMP, UniqueConstraint, func
+from sqlalchemy import Column, ForeignKey, Index, Integer, TIMESTAMP, UniqueConstraint, text
 from sqlalchemy.orm import relationship
 
 from models.news import Base
@@ -26,7 +26,12 @@ class Favorite(Base):
         nullable=False,
         comment="新闻ID",
     )
-    created_at = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="收藏时间")
+    created_at = Column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+        comment="收藏时间",
+    )
     updated_at = None
 
     # 仅在 Favorite 侧建立关系，避免要求 User/News 先声明 back_populates。
