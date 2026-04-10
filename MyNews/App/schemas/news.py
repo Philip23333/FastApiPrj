@@ -11,6 +11,8 @@ class NewsListItemOut(BaseModel):
     category_name: str
     author: Optional[str] = None
     views: int
+    like_count: int = 0
+    comment_count: int = 0
     publish_time: datetime
     image: Optional[str] = None
     # 列表返回审核状态，便于后台筛选
@@ -35,6 +37,8 @@ class SearchNewsItemOut(BaseModel):
     category_name: str
     author: Optional[str] = None
     views: int
+    like_count: int = 0
+    comment_count: int = 0
     publish_time: datetime
     image: Optional[str] = None
     relevance: int
@@ -50,6 +54,9 @@ class NewsDetailOut(BaseModel):
     category_name: str
     author: Optional[str] = None
     views: int
+    like_count: int = 0
+    comment_count: int = 0
+    is_liked: bool = False
     publish_time: datetime
     image: Optional[str] = None
     # 详情返回完整审核信息，供后台详情页展示
@@ -68,6 +75,8 @@ class NewsAdminItemOut(BaseModel):
     category_name: str
     author: Optional[str] = None
     views: int
+    like_count: int = 0
+    comment_count: int = 0
     publish_time: datetime
     image: Optional[str] = None
     audit_status: str = "pending"
@@ -84,6 +93,8 @@ class NewsAuthorItemOut(BaseModel):
     category_name: str
     author: Optional[str] = None
     views: int
+    like_count: int = 0
+    comment_count: int = 0
     publish_time: datetime
     image: Optional[str] = None
     audit_status: str = "pending"

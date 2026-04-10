@@ -26,12 +26,16 @@ const profile = ref({
   bio: ''
 })
 const works = ref([])
+const likes = ref([])
 const favorites = ref([])
+const comments = ref([])
 const histories = ref([])
 const activeTab = ref('works')
 const loadingProfile = ref(false)
 const loadingWorks = ref(false)
+const loadingLikes = ref(false)
 const loadingFavorites = ref(false)
+const loadingComments = ref(false)
 const loadingHistories = ref(false)
 const message = ref('')
 const favoriteSelectMode = ref(false)
@@ -267,7 +271,7 @@ const fetchFavorites = async () => {
 
     const detailRequests = items.map((fav) =>
       axios
-        .get(withApiBase(`/news/detail/${fav.news_id}`))
+        .get(withApiBase(`/news/detail/${fav.news_id}?increase_view=false`))
         .then((detailRes) => {
           const detail = detailRes.data?.data
           if (!detail) return null
@@ -288,6 +292,71 @@ const fetchFavorites = async () => {
     favorites.value = []
   } finally {
     loadingFavorites.value = false
+  }
+}
+
+const fetchLikes = async () => {
+  // 拉取点赞列表并补齐新闻详情。
+  if (!currentUser.value?.id) return
+
+  loadingLikes.value = true
+  try {
+    const res = await axios.get(withApiBase('/likes/?page=1&size=50'))
+    if (res.data?.code !== 200) {
+      likes.value = []
+      return
+    }
+
+    const items = res.data?.data?.items || []
+    if (!items.length) {
+      likes.value = []
+      return
+    }
+
+    const detailRequests = items.map((like) =>
+      axios
+        .get(withApiBase(`/news/detail/${like.news_id}?increase_view=false`))
+        .then((detailRes) => {
+          const detail = detailRes.data?.data
+          if (!detail) return null
+          return {
+            ...detail,
+            like_id: like.id,
+            like_time: like.created_at,
+          }
+        })
+        .catch(() => null)
+    )
+
+    const detailResults = await Promise.all(detailRequests)
+    likes.value = detailResults.filter(Boolean)
+  } catch (error) {
+    console.error(error)
+    message.value = '拉取点赞列表失败。'
+    likes.value = []
+  } finally {
+    loadingLikes.value = false
+  }
+}
+
+const fetchComments = async () => {
+  // 拉取我的评论列表。
+  if (!currentUser.value?.id) return
+
+  loadingComments.value = true
+  try {
+    const res = await axios.get(withApiBase('/comments/mine?page=1&size=100'))
+    if (res.data?.code === 200) {
+      comments.value = res.data?.data?.items || []
+      return
+    }
+    comments.value = []
+  } catch (error) {
+    console.error(error)
+    message.value = '拉取评论列表失败。'
+    comments.value = []
+  } finally {
+    loadingComments.value = false
   }
 }
 
@@ -381,6 +450,17 @@ const handleFavoriteCardClick = (newsId) => {
     return
   }
   goToNewsDetail(newsId)
+}
+
+const handleLikeCardClick = (newsId) => {
+  goToNewsDetail(newsId)
+}
+
+const handleCommentCardClick = (item) => {
+  router.push({
+    path: `/news/${item.news_id}`,
+    query: { commentId: String(item.id), toComment: '1' },
+  })
 }
 
 const selectAllFavorites = () => {
@@ -521,7 +601,9 @@ onMounted(async () => {
 
   await fetchProfile()
   await fetchWorks()
+  await fetchLikes()
   await fetchFavorites()
+  await fetchComments()
   await fetchHistories()
 })
 
@@ -590,10 +672,24 @@ onBeforeUnmount(() => {
           </button>
           <button
             class="tab-btn"
+            :class="{ active: activeTab === 'likes' }"
+            @click="activeTab = 'likes'"
+          >
+            点赞 {{ likes.length }}
+          </button>
+          <button
+            class="tab-btn"
             :class="{ active: activeTab === 'favorites' }"
             @click="activeTab = 'favorites'"
           >
             收藏 {{ favorites.length }}
+          </button>
+          <button
+            class="tab-btn"
+            :class="{ active: activeTab === 'comments' }"
+            @click="activeTab = 'comments'"
+          >
+            评论 {{ comments.length }}
           </button>
           <button
             class="tab-btn"
@@ -712,6 +808,31 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <div v-else-if="activeTab === 'likes'" class="tab-panel">
+          <div v-if="loadingLikes" class="tip">正在加载点赞...</div>
+          <div v-else-if="likes.length === 0" class="tip">你还没有点赞内容，去发现页看看吧。</div>
+          <div v-else class="news-list">
+            <article
+              class="news-item"
+              v-for="item in likes"
+              :key="item.like_id || item.id"
+              @click="handleLikeCardClick(item.id)"
+            >
+              <div class="news-main">
+                <h3 class="title">{{ item.title }}</h3>
+                <p class="desc">{{ item.description || (item.content ? item.content.slice(0, 90) + '...' : '') }}</p>
+                <div class="meta">
+                  <span>{{ item.category_name || '未分类' }}</span>
+                  <span>{{ item.views }} 阅读</span>
+                  <span>{{ item.like_count || 0 }} 点赞</span>
+                  <span v-if="item.like_time">点赞于 {{ formatViewTime(item.like_time) }}</span>
+                </div>
+              </div>
+              <img v-if="item.image" :src="normalizeImageUrl(item.image)" alt="cover" class="cover" />
+            </article>
+          </div>
+        </div>
+
         <div v-else-if="activeTab === 'favorites'" class="tab-panel">
           <div v-if="loadingFavorites" class="tip">正在加载收藏...</div>
           <div v-else-if="favorites.length === 0" class="tip">你还没有收藏内容，去发现页看看吧。</div>
@@ -744,6 +865,27 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <img v-if="item.image" :src="normalizeImageUrl(item.image)" alt="cover" class="cover" />
+            </article>
+          </div>
+        </div>
+        <div v-else-if="activeTab === 'comments'" class="tab-panel">
+          <div v-if="loadingComments" class="tip">正在加载评论...</div>
+          <div v-else-if="comments.length === 0" class="tip">你还没有评论内容。</div>
+          <div v-else class="news-list">
+            <article
+              class="news-item"
+              v-for="item in comments"
+              :key="item.id"
+              @click="handleCommentCardClick(item)"
+            >
+              <div class="news-main">
+                <h3 class="title">{{ item.title }}</h3>
+                <p class="desc">评论：{{ item.content }}</p>
+                <div class="meta">
+                  <span>{{ item.news_id }}</span>
+                  <span v-if="item.created_at">评论于 {{ formatViewTime(item.created_at) }}</span>
+                </div>
+              </div>
             </article>
           </div>
         </div>

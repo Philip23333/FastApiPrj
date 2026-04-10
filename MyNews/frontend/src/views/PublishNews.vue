@@ -584,67 +584,68 @@ onBeforeUnmount(() => {
         </div>
         </div>
 
-        <aside class="assistant-panel">
-          <div class="assistant-head">
-            <h3>AI写作助手</h3>
-            <p>输入你的写作需求，快速生成标题、摘要和正文建议</p>
-          </div>
-
-          <textarea
-            v-model="assistantPrompt"
-            rows="4"
-            class="assistant-input"
-            placeholder="例如：帮我写一篇关于新能源汽车价格战的新闻稿，重点突出消费者影响"
-          ></textarea>
-
-          <button
-            type="button"
-            class="assistant-run"
-            :disabled="assistantLoading"
-            @click="runWritingAssistant"
-          >
-            {{ assistantLoading ? '生成中...' : '生成写作建议' }}
-          </button>
-
-          <p v-if="assistantError" class="assistant-error">{{ assistantError }}</p>
-
-          <div v-if="assistantResult" class="assistant-result">
-            <section v-if="assistantResult.title_suggestions?.length" class="assistant-block">
-              <h4>标题建议</h4>
-              <ul>
-                <li
-                  v-for="(item, idx) in assistantResult.title_suggestions"
-                  :key="`title-${idx}`"
-                  class="assistant-item clickable"
-                  @click="applyTitleSuggestion(item)"
-                >
-                  <span>{{ item }}</span>
-                </li>
-              </ul>
-            </section>
-
-            <section v-if="assistantResult.description_suggestion" class="assistant-block">
-              <h4>摘要建议</h4>
-              <p class="assistant-item clickable" @click="applyDescriptionSuggestion">{{ assistantResult.description_suggestion }}</p>
-            </section>
-
-            <section v-if="assistantResult.content_suggestions?.length" class="assistant-block">
-              <h4>正文建议</h4>
-              <ul>
-                <li
-                  v-for="(item, idx) in assistantResult.content_suggestions"
-                  :key="`content-${idx}`"
-                  class="assistant-item clickable"
-                  @click="insertSuggestionToEditor(item)"
-                >
-                  <p>{{ item }}</p>
-                </li>
-              </ul>
-            </section>
-          </div>
-        </aside>
       </div>
     </main>
+
+    <aside class="assistant-panel">
+      <div class="assistant-head">
+        <h3>AI写作助手</h3>
+        <p>输入你的写作需求，快速生成标题、摘要和正文建议</p>
+      </div>
+
+      <textarea
+        v-model="assistantPrompt"
+        rows="4"
+        class="assistant-input"
+        placeholder="例如：帮我写一篇关于新能源汽车价格战的新闻稿，重点突出消费者影响"
+      ></textarea>
+
+      <button
+        type="button"
+        class="assistant-run"
+        :disabled="assistantLoading"
+        @click="runWritingAssistant"
+      >
+        {{ assistantLoading ? '生成中...' : '生成写作建议' }}
+      </button>
+
+      <p v-if="assistantError" class="assistant-error">{{ assistantError }}</p>
+
+      <div v-if="assistantResult" class="assistant-result">
+        <section v-if="assistantResult.title_suggestions?.length" class="assistant-block">
+          <h4>标题建议</h4>
+          <ul>
+            <li
+              v-for="(item, idx) in assistantResult.title_suggestions"
+              :key="`title-${idx}`"
+              class="assistant-item clickable"
+              @click="applyTitleSuggestion(item)"
+            >
+              <span>{{ item }}</span>
+            </li>
+          </ul>
+        </section>
+
+        <section v-if="assistantResult.description_suggestion" class="assistant-block">
+          <h4>摘要建议</h4>
+          <p class="assistant-item clickable" @click="applyDescriptionSuggestion">{{ assistantResult.description_suggestion }}</p>
+        </section>
+
+        <section v-if="assistantResult.content_suggestions?.length" class="assistant-block">
+          <h4>正文建议</h4>
+          <ul>
+            <li
+              v-for="(item, idx) in assistantResult.content_suggestions"
+              :key="`content-${idx}`"
+              class="assistant-item clickable"
+              @click="insertSuggestionToEditor(item)"
+            >
+              <p>{{ item }}</p>
+            </li>
+          </ul>
+        </section>
+      </div>
+    </aside>
 
     <transition name="toast-fade">
       <div v-if="toastVisible" class="toast toast-success">{{ toastMessage }}</div>
@@ -686,16 +687,19 @@ onBeforeUnmount(() => {
 }
 
 .assistant-panel {
-  width: 330px;
-  flex-shrink: 0;
-  position: sticky;
+  width: min(360px, calc(100vw - 24px));
+  position: fixed;
+  right: 300px;
   top: 88px;
+  max-height: calc(100vh - 104px);
+  overflow: auto;
   background: linear-gradient(150deg, #f8fafc 0%, #f1f5f9 100%);
   color: #1e293b;
   border-radius: 16px;
   padding: 16px;
   box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
   text-align: left;
+  z-index: 15;
 }
 
 .assistant-head h3 {
@@ -984,7 +988,7 @@ onBeforeUnmount(() => {
 
 :deep(.ql-container.ql-snow) {
   border: none;
-  min-height: 340px;
+  min-height: 500px;
   font-size: 15px;
 }
 
@@ -1133,12 +1137,14 @@ onBeforeUnmount(() => {
   }
 
   .publish-shell {
-    flex-direction: column;
+    display: block;
   }
+}
 
+@media (max-width: 1560px) {
   .assistant-panel {
-    width: 100%;
-    position: static;
+    right: 8px;
+    width: min(320px, calc(100vw - 16px));
   }
 }
 
@@ -1154,6 +1160,13 @@ onBeforeUnmount(() => {
 
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .assistant-panel {
+    position: static;
+    width: auto;
+    max-height: none;
+    margin: 0 12px 16px;
   }
 
   .title-input {
